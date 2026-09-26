@@ -1,0 +1,58 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: askvault-prod
+  namespace: argocd
+  labels:
+    app.kubernetes.io/part-of: askvault
+    app.kubernetes.io/environment: prod
+spec:
+  project: askvault
+  source:
+    # Same SSH form as the AppProject above and as the registered repository.
+    repoURL: git@github.com:benzac708/askvault-gitops.git
+    # Both Applications track the `main` BRANCH. What differs is not the branch
+    # but the kustomize `images:` pin inside overlays/prod, which names the exact
+    # sha the prod overlay deploys. One branch, two overlays, two image pins:
+    # promotion is a commit that moves a sha, which is what makes the running
+    # artifact reviewable in a diff.
+    targetRevision: main
+    path: overlays/prod
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: askvault-prod
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+---
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: askvault-dev
+  namespace: argocd
+  labels:
+    app.kubernetes.io/part-of: askvault
+    app.kubernetes.io/environment: dev
+spec:
+  project: askvault
+  source:
+    repoURL: git@github.com:benzac708/askvault-gitops.git
+    # dev also tracks the `main` branch, but its overlay points at the rolling
+    # `:main` image tag, so dev always runs the newest build while prod runs a
+    # pinned sha. That asymmetry is the point: dev is where a bad build is
+    # discovered, and it must not be able to reach prod without a human writing
+    # a new sha into the prod overlay.
+    targetRevision: main
+    path: overlays/dev
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: askvault-dev
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true

@@ -1,0 +1,35 @@
+apiVersion: argoproj.io/v1alpha1
+kind: AppProject
+metadata:
+  name: askvault
+  namespace: argocd
+spec:
+  description: AskVault app namespaces only (L5)
+  # This URL must match the URL the repository is REGISTERED under, character for
+  # character. Argo matches sourceRepos by string, not by "same repo, different
+  # transport" -- registering the repo as git@github.com:... while this line says
+  # https://github.com/... produces a project that permits nothing, and the
+  # Application then refuses to sync with a message about the project rather than
+  # about the URL. Both are the SSH form, because the credential the cluster
+  # holds is a read-only deploy key and not a token.
+  sourceRepos:
+    - git@github.com:benzac708/askvault-gitops.git
+  destinations:
+    - namespace: askvault-dev
+      server: https://kubernetes.default.svc
+    - namespace: askvault-prod
+      server: https://kubernetes.default.svc
+  # L5 in one field: no cluster-scoped object and no RBAC may be created from
+  # this project. A compromised app repo can therefore not escalate itself by
+  # writing a ClusterRoleBinding, and cannot mint a ServiceAccount token for
+  # another namespace. `clusterResourceWhitelist: []` is the whole reason to use
+  # an AppProject at all rather than the built-in `default` project.
+  clusterResourceWhitelist: []
+  namespaceResourceWhitelist:
+    - group: '*'
+      kind: '*'
+  # FINDING 20 is the honest cost of the line above: this project cannot write
+  # to `monitoring` or `ingress-controller`, so the Traefik PodMonitor had to be
+  # created out of band by hand. Scoping is still right, but part of the
+  # observability story does not live in Git, and pretending otherwise would be
+  # the actual defect.
