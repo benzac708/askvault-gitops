@@ -33,6 +33,28 @@ spec:
         app.kubernetes.io/component: rag-service
         app.kubernetes.io/part-of: askvault
     spec:
+      # C1. The image lives in ghcr.io, which requires an authenticated pull
+      # token even for a public image once the registry decides to challenge.
+      # Without this, the kubelet's own anonymous pull is refused with a 403
+      # and the pod stays in ErrImagePull -- which is indistinguishable, from
+      # the outside, from a wrong tag or a missing image.
+      #
+      # The symptom that made this necessary is worth recording, because it is
+      # the kind of thing that reads as a cluster fault: a `docker pull` and a
+      # `crictl pull` from a shell on the SAME host both succeed with no
+      # credentials at all, while the kubelet's own token request is refused on
+      # every one of five attempts. The image was never the problem; the
+      # puller's identity was.
+      #
+      # This is a workaround, not a root cause. It makes the pull
+      # authenticated and therefore reliable, but it does not explain why the
+      # kubelet's anonymous request is challenged when a shell's is not. The
+      # README says so plainly rather than presenting this as understood.
+      #
+      # The credential is a Secret and is created out of band, never in this
+      # repository. L1: the reference is here, the value is not.
+      imagePullSecrets:
+        - name: ghcr-pull
       securityContext:
         runAsUser: 10001
         runAsGroup: 10001
