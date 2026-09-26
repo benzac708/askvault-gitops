@@ -1,0 +1,24 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# Dev tracks the moving tag. The point of dev is to exercise whatever was just
+# merged, so an immutable pin here would defeat the purpose.
+namespace: askvault-dev
+
+resources:
+  - ../../base
+  - namespace.yaml
+
+images:
+  - name: ghcr.io/benzac708/askvault
+    newTag: main
+
+# Env only. The base already carries the strict D32 ceilings; dev relaxes them
+# because those ceilings exist to protect a paid provider quota, and dev runs
+# against the deterministic mock provider with no quota to protect. Dev is
+# therefore the one place where a generous limit costs nothing.
+patches:
+  - path: patch-dev.yaml
+    target:
+      kind: Deployment
+      name: askvault

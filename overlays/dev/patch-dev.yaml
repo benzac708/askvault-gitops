@@ -1,0 +1,23 @@
+# Dev-only overrides. Everything not listed here is inherited from base.
+#
+# Note what is *not* overridden: the pod and container securityContext, the
+# probes, the resource envelope, the read-only root filesystem, and the
+# single-replica setting. Dev runs the same hardening as prod. A dev overlay
+# that quietly relaxed the security context would be the first place a real
+# vulnerability got introduced and the last place anyone would look.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: askvault
+spec:
+  template:
+    spec:
+      containers:
+        - name: askvault
+          env:
+            - name: RATE_LIMIT_PER_IP_PER_MINUTE
+              value: "60"
+            - name: RATE_LIMIT_GLOBAL_PER_MINUTE
+              value: "120"
+            - name: RATE_LIMIT_GLOBAL_PER_DAY
+              value: "1000"

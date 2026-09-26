@@ -1,0 +1,38 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# Prod pins the immutable commit tag. This is the whole promotion mechanism
+# (D10a): CI publishes `sha-<12>` and `main`; moving prod is a seven-character
+# edit here, and a rollback is the same edit pointing at the previous tag. No
+# rebuild, no registry round-trip, and the running image is always traceable to
+# a commit in the application repository.
+#
+# The tag below is the image that was actually built, scanned, and pulled
+# successfully -- not a placeholder. Bumping it is a deliberate, reviewable act.
+namespace: askvault-prod
+
+resources:
+  - ../../base
+  - namespace.yaml
+
+images:
+  - name: ghcr.io/benzac708/askvault
+    newTag: sha-097a3a66cbfe
+
+# The public hostname, and nothing else. This is the single environment-specific
+# line in prod: base carries the sentinel `askvault.invalid` so that applying base
+# on its own can never claim a real public name.
+patches:
+  - path: patch-ingress.yaml
+
+# Everything else about prod is the base posture exactly: the D32 rate ceilings,
+# the read-only root filesystem, the dropped capabilities, the single replica, the
+# measured resource envelope, the two Exact ingress paths. The remaining pending
+# production change is documented in the README: switching LLM_PROVIDER from
+# `mock` to `openrouter` once the key Secret exists. That is a single-line patch
+# to this directory, and it is deliberately not written speculatively.
+#
+# Note this widens the dev/prod diff beyond the 22 lines recorded for 9h: the
+# hostname is now a second axis of difference. It is deployment topology rather
+# than application config, which is why it lives here and not in the app repo,
+# but L3's "env only" wording should be read with that one exception.

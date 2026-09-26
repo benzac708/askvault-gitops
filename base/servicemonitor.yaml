@@ -1,0 +1,29 @@
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: askvault
+  labels:
+    app.kubernetes.io/name: askvault
+    app.kubernetes.io/component: rag-service
+    app.kubernetes.io/part-of: askvault
+spec:
+  # Both labels, not just the name. The name label is the one Argo CD and the
+  # Service itself agree on; adding the component label means this can only ever
+  # select the app's own Service and not a future neighbour that reuses the name.
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: askvault
+      app.kubernetes.io/component: rag-service
+  # No namespaceSelector. The CRD defaults it to the namespace of this object, so
+  # the same manifest is correct in askvault-dev and askvault-prod with no overlay
+  # patch. That is the whole reason this file lives in base rather than being
+  # duplicated per environment.
+  #
+  # `port: http` is the Service's *named* port, not 8000. The ServiceMonitor talks
+  # to the Service directly and never goes through the Ingress, so /metrics is
+  # scraped even though L2 keeps it unrouted from outside.
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: 30s
+      scrapeTimeout: 10s

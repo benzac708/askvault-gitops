@@ -1,0 +1,182 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: askvault
+  labels:
+    app.kubernetes.io/name: askvault
+    app.kubernetes.io/component: rag-service
+    app.kubernetes.io/part-of: askvault
+spec:
+  # The rate limiter is process-global state, not a shared store. A second
+  # replica does not double the app's capacity, it doubles every ceiling in
+  # D32 -- so 2 replicas would quietly permit 30 requests/minute against a
+  # provider that allows 20. One replica is the correct answer, not a
+  # conservative one. Scaling out means moving the counters to shared storage
+  # first, which is out of scope.
+  replicas: 1
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      # Never drop below one ready pod. With a single replica, the default
+      # maxUnavailable:25% rounds to 0 anyway, but stating it keeps the
+      # intent legible and survives a future replica count change.
+      maxUnavailable: 0
+      maxSurge: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: askvault
+      app.kubernetes.io/component: rag-service
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: askvault
+        app.kubernetes.io/component: rag-service
+        app.kubernetes.io/part-of: askvault
+    spec:
+      securityContext:
+        runAsUser: 10001
+        runAsGroup: 10001
+        # The emptyDir below is created by the kubelet as root:root 0755, which
+        # leaves uid 10001 unable to create the SQLite file inside it. fsGroup
+        # makes the volume group-owned by 10001 so the write succeeds without
+        # the pod running as root.
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      # Long enough for the preStop sleep below plus a normal shutdown. If this
+      # were shorter than the drain, SIGKILL would arrive while a request was
+      # still in flight.
+      terminationGracePeriodSeconds: 30
+      containers:
+        - name: askvault
+          # Replaced per environment by the kustomize `images` transformer.
+          # Never a floating tag in production -- see overlays/prod.
+          image: ghcr.io/benzac708/askvault:main
+          # With an immutable tag in production this is close to moot, but it
+          # avoids a registry round-trip per pod start on a single-node cluster.
+          imagePullPolicy: IfNotPresent
+          securityContext:
+            allowPrivilegeEscalation: false
+            # The image needs no writable path outside /data: the corpus is
+            # baked in at /app/samples, the index is derived at startup into
+            # the mounted volume, and uvicorn runs fine with a read-only /tmp.
+            # Verified against the built image, not assumed.
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          ports:
+            - name: http
+              containerPort: 8000
+              protocol: TCP
+          env:
+            # Absolute paths only. L6: a relative path silently depends on the
+            # image's WORKDIR, so a future WORKDIR change would relocate the
+            # database without any error surfacing until the index came back
+            # empty.
+            - name: DB_PATH
+              value: /data/askvault.db
+            - name: SAMPLES_DIR
+              value: /app/samples
+            - name: LOG_LEVEL
+              value: INFO
+            # L4. One JSON object per line on stdout, which is what makes the
+            # logs queryable rather than merely present.
+            - name: METRICS_ENABLED
+              value: "true"
+            # D32, restated here so the ceilings a reviewer cares about are
+            # visible in the manifest instead of only in Python. All three sit
+            # strictly under the provider's 20 req/min and 50 req/day, so the
+            # app exhausts its own budget first and returns a clean 429 rather
+            # than leaking a provider error to the caller.
+            - name: RATE_LIMIT_PER_IP_PER_MINUTE
+              value: "10"
+            - name: RATE_LIMIT_GLOBAL_PER_MINUTE
+              value: "15"
+            - name: RATE_LIMIT_GLOBAL_PER_DAY
+              value: "40"
+            # Traefik is the only in-cluster caller, so every request arrives
+            # from one peer address and per-IP limiting depends on
+            # X-Forwarded-For. A client can spoof that header to dodge the
+            # per-IP ceiling -- the spoofable ceiling is the fine one, and the
+            # global ceilings are what actually protect the quota.
+            - name: TRUST_FORWARDED_FOR
+              value: "true"
+            # The LLM provider. `mock` returns deterministic answers with no
+            # network call, so the service is fully functional and the probes
+            # pass without a credential. This becomes `openrouter` in the prod
+            # overlay once the key is provisioned -- see README.
+            - name: LLM_PROVIDER
+              value: mock
+            - name: LLM_TIMEOUT_SECONDS
+              value: "30"
+            # The provider key is a Secret, never a plain env value, and it
+            # lives outside this repository -- GitOps manifests are public.
+            # `optional: true` so the pod still starts against the mock
+            # provider; a missing key is a startup-order problem, not a reason
+            # to keep credentials in git.
+            - name: LLM_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: askvault-llm
+                  key: api-key
+                  optional: true
+          resources:
+            # Measured, not guessed: 56.5 MiB RSS idle, 57.0 MiB under load,
+            # 6 threads, 13 fds, 24 KiB index. The request sits above the
+            # observed floor so the scheduler reserves enough, and the limit
+            # sits far enough above to absorb an indexing run plus an LLM
+            # response without an OOMKill.
+            requests:
+              cpu: 50m
+              memory: 96Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+          # Cold start to /readyz 200 was measured at 1.35s. The startup probe
+          # is deliberately far more generous than that: it is the gate that
+          # holds back the liveness and readiness probes, so a slow first boot
+          # must not be able to trip a restart loop.
+          startupProbe:
+            httpGet:
+              path: /readyz
+              port: http
+            periodSeconds: 2
+            failureThreshold: 30
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 10
+            failureThreshold: 3
+            timeoutSeconds: 2
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: http
+            periodSeconds: 5
+            failureThreshold: 2
+            timeoutSeconds: 2
+          lifecycle:
+            preStop:
+              # Endpoint removal and pod termination race: the Service can
+              # still route to this pod for a moment after SIGTERM. Sleeping
+              # inside the grace period lets in-flight requests finish before
+              # the process exits. /bin/sh is present in the runtime image --
+              # checked, not assumed.
+              exec:
+                command: ["/bin/sh", "-c", "sleep 5"]
+          volumeMounts:
+            # D29: the only writable path the pod needs. The corpus is baked
+            # into the image; the FTS index is derived at startup and must
+            # therefore live on a volume.
+            - name: data
+              mountPath: /data
+      volumes:
+        - name: data
+          emptyDir:
+            # The index measures 24 KiB. This ceiling is not a size forecast,
+            # it is a blast-radius bound: if a future change made the store
+            # grow without bound, it exhausts its own quota and gets evicted
+            # instead of filling the node's disk.
+            sizeLimit: 256Mi

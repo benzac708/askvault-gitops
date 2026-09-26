@@ -1,0 +1,24 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# One image definition, two overlays, environment differences only (L3).
+# The base deliberately carries no Namespace: the namespace is one of only two
+# things that genuinely differ between environments, so each overlay owns its
+# own Namespace resource rather than sharing one that a name transformer
+# rewrites. Nothing else here is conditional.
+#
+# L1 IS UNRESOLVED, and this comment is the honest record of that. Host-side
+# anonymous pull works: the ghcr token endpoint returns 200 and both
+# `docker pull` and `crictl pull` succeed unauthenticated. The kubelet's own
+# anonymous token request returns 403 Forbidden on all five attempts, so a
+# manifest with no imagePullSecret does not actually start a pod on a cold node.
+# The running dev pod only came up because a manual `crictl pull` pre-seeded the
+# node content store. Ruled out so far: no /etc/rancher/k3s/registries.yaml, and
+# the k3s containerd template has no registry mirror or rewrite. Until this is
+# settled, treat the absence of an imagePullSecret here as unproven rather than
+# as a decision, and expect this to gate Argo CD (9i) for the same reason.
+resources:
+  - deployment.yaml
+  - service.yaml
+  - ingress.yaml
+  - servicemonitor.yaml
