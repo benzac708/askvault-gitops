@@ -47,7 +47,6 @@ set -euo pipefail
 readonly NS="traefik"
 readonly RELEASE="traefik"
 readonly CHART="traefik/traefik"
-readonly ENDPOINT_IP="${TRAEFIK_ENDPOINT_IP:-}"
 readonly NODEPORT_HTTP=30080
 readonly NODEPORT_HTTPS=30443
 
@@ -60,8 +59,43 @@ export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
 
 printf '== traefik ==\n'
 
-[ -n "$ENDPOINT_IP" ] || fail "set TRAEFIK_ENDPOINT_IP to this node's address, e.g.:
-  TRAEFIK_ENDPOINT_IP=10.0.0.1 $0"
+# --- the endpoint IP ----------------------------------------------------------
+# This is the address Traefik publishes on its Ingresses so Argo can report them
+# Healthy. Hardcoding it in the script would be wrong, but demanding it by hand
+# was unnecessary friction: the host already knows its own addresses.
+#
+# AUTO-DETECT, in order of preference, with an explicit override.
+#
+# The Tailscale address is preferred because that is the interface Caddy binds
+# to, which is the whole reason Traefik is NodePort. A bare LAN IP would be
+# resolvable from fewer places; a public IP would be exposed.
+detect_endpoint_ip() {
+  # 1. An explicit override always wins.
+  if [ -n "${TRAEFIK_ENDPOINT_IP:-}" ]; then
+    printf '%s' "$TRAEFIK_ENDPOINT_IP"
+    return 0
+  fi
+
+  # 2. The Tailscale interface, if this host is on a tailnet.
+  if command -v tailscale >/dev/null 2>&1; then
+    ip="$(tailscale ip -4 2>/dev/null | head -1)"
+    [ -n "$ip" ] && { printf '%s' "$ip"; return 0; }
+  fi
+
+  # 3. The node's internal address, as Kubernetes itself sees it. This is the
+  #    most portable option: it exists on any k3s node with no extra tooling.
+  ip="$(sudo -E k3s kubectl get node -o jsonpath='{.items[0].status.addresses[?(@.type=="InternalIP")].address}' 2>/dev/null)"
+  [ -n "$ip" ] && { printf '%s' "$ip"; return 0; }
+
+  return 1
+}
+
+if ! ENDPOINT_IP="$(detect_endpoint_ip)"; then
+  fail "could not determine this node's address.
+Set it explicitly:
+  TRAEFIK_ENDPOINT_IP=<address> $0"
+fi
+note "endpoint IP: $ENDPOINT_IP (override with TRAEFIK_ENDPOINT_IP)"
 
 # --- helm repo ----------------------------------------------------------------
 # `helm` needs the kubeconfig, which is root-only by design (finding 6). Every
@@ -90,11 +124,30 @@ sudo -E helm upgrade --install "$RELEASE" "$CHART" -n "$NS" --create-namespace \
 # --- read the rendered object back -------------------------------------------
 # helm accepted --set without validating the key paths. The only trustworthy
 # source is the running Deployment's args.
-args="$(sudo -E k3s kubectl -n "$NS" get deploy "$RELEASE" \
-  -o jsonpath='{range .spec.template.spec.containers[0].args[*]}{.}{"\n"}{end}')"
+#
+# BUG FOUND ON THE FIRST BARE-HOST RUN, 2026-09-26, and it was in this script's
+# own ASSERTION rather than in the install. The original used:
+#     -o jsonpath='{range .spec.template.spec.containers[0].args[*]}{.}{"\n"}{end}'
+# which returns a perfectly good list when run by hand, but an EMPTY STRING
+# when run from inside this script. The nested quoting in the jsonpath range
+# expression does not survive the layering. The result was a false failure
+# claiming a flag was missing when it was present the whole time — the same
+# class of error as findings 26 and 28: a check that reports on itself rather
+# than on the thing it claims to check.
+#
+# jq is used instead. It is already a dependency of the drill, it takes JSON on
+# stdin rather than a format string, and one value per line needs no escaping.
+args="$(sudo -E k3s kubectl -n "$NS" get deploy "$RELEASE" -o json 2>/dev/null \
+  | jq -r '.spec.template.spec.containers[0].args[]' 2>/dev/null || true)"
+[ -n "$args" ] || fail "could not read the rendered args — the Deployment may not exist yet"
 
 assert_arg() {
-  printf '%s\n' "$args" | grep -qx -- "$1" || fail "rendered args missing: $1"
+  # `grep -Fxq` with the pattern after `--`: -F makes it literal (the values
+  # contain `.` and `:`), -x requires a whole-line match so a prefix does not
+  # count, and `--` stops a leading dash being parsed as an option. With -x -F
+  # the leading `--` in the pattern is fine; it is only a problem when grep is
+  # asked to interpret the pattern as regex or as options.
+  printf '%s\n' "$args" | grep -Fxq -- "$1" || fail "rendered args missing: $1"
   ok "arg $1"
 }
 assert_arg "--providers.kubernetesingress.ingressendpoint.ip=$ENDPOINT_IP"
