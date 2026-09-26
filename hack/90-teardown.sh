@@ -275,6 +275,18 @@ if [ "$KEEP_K3S" -eq 1 ]; then
 elif [ ! -x /usr/local/bin/k3s-uninstall.sh ]; then
   note "k3s-uninstall.sh not present — k3s does not appear to be installed"
 else
+  # `k3s-killall.sh` first, exactly as section 6.6 of the drill document does.
+  # It SIGKILLs every container regardless of state, including the CNI and
+  # containerd-shim processes that would otherwise hold the data dirs open and
+  # make the rm below fail or partially succeed. The doc's note is right that
+  # there is NO waiting after this: there is no graceful path to block on.
+  if [ -x /usr/local/bin/k3s-killall.sh ]; then
+    if gate "k3s-killall.sh   (SIGKILL every container; no graceful path exists)"; then
+      sudo /usr/local/bin/k3s-killall.sh || true
+      ok "killed all k3s containers"
+    fi
+  fi
+
   if gate "k3s-uninstall.sh   (stops and removes k3s, its units, /etc/rancher/k3s, /var/lib/kubelet)"; then
     sudo /usr/local/bin/k3s-uninstall.sh || true
     ok "k3s uninstalled"
@@ -282,9 +294,11 @@ else
 
   # Upstream LEAVES these, and leaving them means a rebuild that never touches
   # the registry. This is the difference between a real 0% and a warm one.
-  if gate "rm -rf /var/lib/rancher/k3s /etc/rancher/node   (containerd content store + node password)"; then
-    sudo rm -rf /var/lib/rancher/k3s /etc/rancher/node
-    ok "removed /var/lib/rancher/k3s and /etc/rancher/node"
+  # /var/lib/cni and /var/lib/kubelet are in the drill document's list too.
+  if gate "rm -rf /etc/rancher/k3s /etc/rancher/node /var/lib/rancher/k3s /var/lib/kubelet /var/lib/cni   (content store + node password + CNI state)"; then
+    sudo rm -rf /etc/rancher/k3s /etc/rancher/node /var/lib/rancher/k3s \
+                 /var/lib/kubelet /var/lib/cni
+    ok "removed data dirs"
   fi
 
   # /run is tmpfs, but a stopped-but-not-reaped runtime can hold it open.
@@ -313,6 +327,8 @@ else
     [ -x /usr/local/bin/k3s ] && fail "k3s binary still present" || ok "k3s binary gone"
     [ -d /var/lib/rancher/k3s ] && fail "/var/lib/rancher/k3s still present — rebuild would reuse cached images" || ok "containerd store gone"
     [ -d /etc/rancher/k3s ] && fail "/etc/rancher/k3s still present" || ok "/etc/rancher/k3s gone"
+    [ -d /var/lib/kubelet ] && fail "/var/lib/kubelet still present" || ok "/var/lib/kubelet gone"
+    [ -d /var/lib/cni ] && fail "/var/lib/cni still present" || ok "/var/lib/cni gone"
     systemctl is-active --quiet k3s && fail "k3s unit still active" || ok "k3s unit inactive"
   fi
 
