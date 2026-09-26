@@ -1,0 +1,22 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: askvault-config
+# D31. Provider, model id and base URL are configuration, not credentials.
+# The key is the only secret and it lives in a Secret, out of band, and never
+# in this repository.
+#
+# These base values are the `mock` provider: deterministic answers, no network
+# call, so the service is fully functional and every probe passes without a
+# credential. That is what makes the app testable and the dev overlay cheap.
+# The prod overlay patches exactly these three keys and nothing else, so the
+# dev/prod diff stays readable and the promotion stays reviewable.
+data:
+  LLM_PROVIDER: "mock"
+  # `mock` is also the model id the mock provider expects. Pydantic defaults
+  # this to "mock" too, so the base values here and the code's own defaults
+  # agree -- a divergence between them would be invisible until a request.
+  LLM_MODEL: "mock"
+  # Empty is correct for the mock provider, which never makes a network call.
+  LLM_BASE_URL: ""
+  LLM_TIMEOUT_SECONDS: "30"

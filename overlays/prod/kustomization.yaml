@@ -24,6 +24,7 @@ images:
 # on its own can never claim a real public name.
 patches:
   - path: patch-ingress.yaml
+  - path: patch-config.yaml
 
 # Everything else about prod is the base posture exactly: the D32 rate ceilings,
 # the read-only root filesystem, the dropped capabilities, the single replica, the

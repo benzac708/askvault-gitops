@@ -22,3 +22,4 @@ resources:
   - service.yaml
   - ingress.yaml
   - servicemonitor.yaml
+  - configmap.yaml

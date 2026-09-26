@@ -1,0 +1,23 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: askvault-config
+# The one and only prod difference in application configuration. Three keys,
+# and a strategic-merge patch rather than a replacement, so the two keys prod
+# does not care about are inherited from base and cannot drift out of sync
+# with dev.
+#
+# The model id is pinned to a specific published model, read off OpenRouter's
+# own /api/v1/models on 2026-09-26 rather than guessed. It is deliberately NOT
+# `openrouter/free`: that is a rotating pool whose behaviour and availability
+# change without notice, and an unpinned free model in a portfolio project is
+# indistinguishable from an outage. It is also the cheapest option by an order
+# of magnitude, which matters because the D32 ceilings allow 40 requests a day.
+#
+# Cost at those ceilings: 40 requests/day at roughly 2k prompt and 500
+# completion tokens is under two US cents a day. The rate limiter, not the
+# budget, is the real control here.
+data:
+  LLM_PROVIDER: "openrouter"
+  LLM_MODEL: "google/gemini-2.5-flash-lite"
+  LLM_BASE_URL: "https://openrouter.ai/api/v1"

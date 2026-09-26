@@ -102,14 +102,40 @@ spec:
             # global ceilings are what actually protect the quota.
             - name: TRUST_FORWARDED_FOR
               value: "true"
-            # The LLM provider. `mock` returns deterministic answers with no
-            # network call, so the service is fully functional and the probes
-            # pass without a credential. This becomes `openrouter` in the prod
-            # overlay once the key is provisioned -- see README.
+            # D31. The provider, the model id and the base URL are CONFIG, not
+            # credentials, so they travel in a ConfigMap and never in the
+            # Secret -- a model id is not a secret, and putting one in a Secret
+            # makes a reviewer wonder what else is in there.
+            #
+            # The model id is PINNED and read back off the provider's own
+            # /api/v1/models rather than guessed, because a guessed id fails at
+            # request time with a 404 that reads like a provider outage.
+            #
+            # `optional: false` is deliberate. With `optional: true` a missing
+            # ConfigMap would leave the app running on pydantic's defaults --
+            # provider `mock` -- which is precisely the silent-wrong-state
+            # failure this project exists to avoid. Failing the pod at startup
+            # is louder and cheaper than answering from the wrong backend.
             - name: LLM_PROVIDER
-              value: mock
+              valueFrom:
+                configMapKeyRef:
+                  name: askvault-config
+                  key: LLM_PROVIDER
+            - name: LLM_MODEL
+              valueFrom:
+                configMapKeyRef:
+                  name: askvault-config
+                  key: LLM_MODEL
+            - name: LLM_BASE_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: askvault-config
+                  key: LLM_BASE_URL
             - name: LLM_TIMEOUT_SECONDS
-              value: "30"
+              valueFrom:
+                configMapKeyRef:
+                  name: askvault-config
+                  key: LLM_TIMEOUT_SECONDS
             # The provider key is a Secret, never a plain env value, and it
             # lives outside this repository -- GitOps manifests are public.
             # `optional: true` so the pod still starts against the mock
