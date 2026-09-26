@@ -19,12 +19,25 @@ spec:
       server: https://kubernetes.default.svc
     - namespace: askvault-prod
       server: https://kubernetes.default.svc
-  # L5 in one field: no cluster-scoped object and no RBAC may be created from
-  # this project. A compromised app repo can therefore not escalate itself by
-  # writing a ClusterRoleBinding, and cannot mint a ServiceAccount token for
-  # another namespace. `clusterResourceWhitelist: []` is the whole reason to use
-  # an AppProject at all rather than the built-in `default` project.
-  clusterResourceWhitelist: []
+  # L5, stated precisely. `clusterResourceWhitelist` is NOT empty, and the
+  # reason is mechanical rather than a weakening of intent: `Namespace` is a
+  # cluster-scoped kind, so `syncOptions: CreateNamespace=true` cannot work
+  # without it, and it is not covered by `namespaceResourceWhitelist` (which
+  # only ever applies to namespaced kinds). The first attempt at this field was
+  # `clusterResourceWhitelist: []` and the observable symptom was an auto-sync
+  # that retried forever with:
+  #     resource :Namespace is not permitted in project askvault
+  #
+  # So the whitelist names exactly one kind. What matters for L5 is what is
+  # still absent: ClusterRole, ClusterRoleBinding, CRD, ValidatingWebhookConfig,
+  # and every other escalation primitive remain forbidden. Creating a Namespace
+  # grants no permission over anything inside it, so the property the project
+  # exists to hold -- "a compromised app repo cannot escalate itself" -- is
+  # intact. An empty list was the stricter-looking and functionally broken
+  # version of the same policy.
+  clusterResourceWhitelist:
+    - group: ''
+      kind: Namespace
   namespaceResourceWhitelist:
     - group: '*'
       kind: '*'
