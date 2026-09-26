@@ -153,7 +153,22 @@ terminating="$(kc get ns --no-headers 2>/dev/null | awk '$2=="Terminating"{print
 [ -z "$terminating" ] && ok "no namespaces stuck Terminating" || bad "terminating: $terminating"
 
 if kc get validatingwebhookconfiguration -o name 2>/dev/null | grep -qiE 'prometheus|admission'; then
-  bad "a leaked admission webhook is present and will block future applies"
+  # A webhook existing is NOT the failure. The failure is a LEaked one: a
+  # webhook whose backing Service is gone, because with failurePolicy=Fail it
+  # refuses every matching apply cluster-wide and names the webhook rather than
+  # the missing Service. Check the thing that actually breaks, not the name.
+  # (An earlier version of this check flagged cert-manager-webhook, which is
+  # healthy and legitimate -- a gate with false positives gets bypassed.)
+  leaked=0
+  for wh in $(kc get validatingwebhookconfiguration -o name 2>/dev/null | grep -iE 'prometheus|admission'); do
+    svc="$(kc get "$wh" -o jsonpath='{.webhooks[0].clientConfig.service.name}' 2>/dev/null)"
+    ns="$(kc get "$wh" -o jsonpath='{.webhooks[0].clientConfig.service.namespace}' 2>/dev/null)"
+    if [ -n "$svc" ] && ! kc -n "$ns" get svc "$svc" >/dev/null 2>&1; then
+      leaked=$((leaked+1))
+      bad "$(basename "$wh") points at missing service $ns/$svc"
+    fi
+  done
+  [ "$leaked" -eq 0 ] && ok "all admission webhooks have live backing services"
 else
   ok "no leaked webhooks"
 fi
