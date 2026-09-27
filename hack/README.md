@@ -12,16 +12,24 @@ trusting that a command succeeded.
 | `30-traefik.sh` | Traefik v3 as NodePort, CRDs off, endpoint published | 10 |
 | `40-cloudflare.sh` | Tunnel ingress rule → NodePort 30080 | 30 |
 | `50-gitops.sh` | Deploy key, repo registration, AppProject + Applications | 20, 40 |
+| `31-monitoring.sh` | kube-prometheus-stack, ServiceMonitor, estate Grafana wiring | 50 |
+| `rebuild.sh` | **Runs the whole rebuild in order.** Not a step in it. | — |
 | `90-teardown.sh` | Destroy in the correct order. Dry-run by default. | — |
 | `95-export-sanitise.sh` | Render section 6 for publication; **fails** on any hostname leak | — |
-| `99-acceptance.sh` | The drill gate. Read-only. | 50 |
+| `99-acceptance.sh` | The drill gate. Read-only. | 50, 31 |
 
 ## Order that matters
 
 ```
-rebuild:   00 → 10 → 20 → 30 → 40 → 50 → 99
+rebuild:   00 → 10 → 20 → 30 → 40 → 50 → 31 → 99   (or: hack/rebuild.sh)
 teardown:  Applications → app namespaces → helm releases → argocd ns → CRDs
 ```
+
+The **number prefix is thematic, not positional.** `31-monitoring.sh` runs
+after `50-gitops.sh`, because a ServiceMonitor has nothing to scrape until
+the Deployment it watches exists. Sorting the directory and running whatever
+comes out gives a green run with an empty dashboard. `rebuild.sh` is the
+only place the order is encoded; do not reconstruct it from the filenames.
 
 The teardown order is not cosmetic. An Argo `Application` carries a finalizer;
 delete the `argocd` namespace first and nothing is left to remove it, so the
@@ -50,6 +58,11 @@ do for you. Naming the gap is worth more than pretending there isn't one.
 5. **Assert from outside.** A probe that returns 200 in-cluster is a different
    claim from the same path returning 404 at the edge. Both are checked.
 6. **Destruction requires `--yes`.** `90-teardown.sh` is dry-run by default.
+7. **The orchestrator counts failures.** `for s in …; do … || break; done`
+   exits **0** when a step fails, because `break` leaves the loop's status at
+   zero and `set -e` exempts the left side of `||`. That makes a rebuild that
+   died at `50-gitops` report success. `rebuild.sh` keeps a failure count and
+   exits non-zero. A gate that fails open is worse than no gate at all.
 
 ## What these scripts cannot reproduce
 
