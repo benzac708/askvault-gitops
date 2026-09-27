@@ -181,6 +181,149 @@ case "$cm_keys" in
   *)                       ok "no credential in the ConfigMap" ;;
 esac
 
+# --- 9. the platform underneath the app ---------------------------------------
+head_ "platform health"
+# Every namespace this drill builds must be fully Running. A gate that only
+# inspects the askvault path cannot tell you the cluster is coming apart around
+# it, and "the app answers" stays true for a surprisingly long time while pods
+# elsewhere are dead.
+for ns in kube-system argocd traefik cert-manager monitoring askvault-prod askvault-dev; do
+  # Columns are: NAME READY STATUS RESTARTS AGE. So the phase is $3 and the
+  # ready ratio is $2. Assert BOTH: a pod can be Running with 0/1 containers
+  # ready, which is what a failing readiness probe produces, and "Running" alone
+  # would pass it. $2 != $1 is short for "ready count != total count" after
+  # splitting on "/".
+  bad_pods="$(kc -n "$ns" get pods --no-headers 2>/dev/null \
+    | awk '{
+        split($2, r, "/");
+        if ($3 != "Running" && $3 != "Completed" && $3 != "Succeeded") next_ok = 0;
+        else if (r[1] != r[2]) next_ok = 0;
+        else next_ok = 1;
+        if (!next_ok) print $1" ("$3" "$2")";
+      }' \
+    | tr '\n' ' ')"
+  if [ -z "$bad_pods" ]; then
+    n="$(kc -n "$ns" get pods --no-headers 2>/dev/null | wc -l)"
+    ok "$ns: all $n pods Running"
+  else
+    bad "$ns has unhealthy pods: $bad_pods"
+  fi
+done
+
+# metrics-server is easy to leave out and hard to notice missing until something
+# asks for resource metrics. Assert the API answers, not that a Pod exists.
+if kc top nodes >/dev/null 2>&1; then
+  ok "metrics-server answers (kubectl top works)"
+else
+  bad "metrics-server is not serving metrics — kubectl top fails, so any HPA is blind"
+fi
+
+# --- 10. cert-manager, a hard dependency of the monitoring chart --------------
+head_ "cert-manager"
+for d in cert-manager cert-manager-cainjector cert-manager-webhook; do
+  rdy="$(kc -n cert-manager get deploy "$d" -o jsonpath='{.status.readyReplicas}' 2>/dev/null)"
+  [ "${rdy:-0}" -ge 1 ] && ok "$d has ${rdy} ready" || bad "$d has no ready replicas"
+done
+
+# Deployments being Ready is not the same as certificates being ISSUED. The
+# operator's admission webhook cert is what 31-monitoring.sh depends on.
+issued="$(kc get certificate -A --no-headers 2>/dev/null | awk '$3=="True"' | wc -l)"
+if [ "${issued:-0}" -ge 1 ]; then
+  ok "$issued Certificate(s) issued"
+else
+  bad "no Certificate reports Ready=True — the monitoring webhook cert is not issued"
+fi
+
+# --- 11. monitoring is only useful if something READS it ----------------------
+head_ "monitoring integration"
+prom_pod="$(kc -n monitoring get pod -l app.kubernetes.io/name=prometheus \
+  -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)"
+if [ -n "$prom_pod" ]; then
+  ok "Prometheus pod present ($prom_pod)"
+  # uptime is a real signal: a Prometheus that just restarted has lost its
+  # retention window, so this reports how long it has actually been collecting.
+  uptime="$(kc -n monitoring get pod "$prom_pod" -o jsonpath='{.status.startTime}' 2>/dev/null)"
+  note "Prometheus started ${uptime:-unknown}"
+  pstate="$(kc -n monitoring get sts prometheus-kube-prometheus-stack-prometheus \
+    -o jsonpath='{.status.readyReplicas}' 2>/dev/null)"
+  [ "${pstate:-0}" -ge 1 ] && ok "Prometheus StatefulSet Ready" || bad "Prometheus StatefulSet not Ready"
+else
+  bad "no Prometheus pod in monitoring"
+fi
+
+# Port-forward and query the real API. Assert a scrape TARGET exists and is up,
+# and that the application's own metric is queryable end to end -- a target being
+# present but never returning a sample proves nothing.
+if [ -n "$prom_pod" ]; then
+  sudo fuser -k 19090/tcp >/dev/null 2>&1 || true
+  pf_log=/tmp/accept-prom-pf.log
+  nohup sudo -E k3s kubectl -n monitoring port-forward "pod/${prom_pod}" 19090:9090 \
+    >"$pf_log" 2>&1 &
+  for _ in $(seq 1 20); do
+    curl -s -o /dev/null --max-time 2 http://127.0.0.1:19090/-/healthy && break
+    sleep 1
+  done
+
+  if ! curl -s --max-time 5 http://127.0.0.1:19090/-/healthy 2>/dev/null | grep -qi healthy; then
+    bad "could not reach the Prometheus API to verify scraping.
+Log:
+$(sed 's/^/    /' "$pf_log" 2>/dev/null | head -5)"
+  else
+    up_targets="$(curl -s --max-time 8 "http://127.0.0.1:19090/api/v1/targets" 2>/dev/null \
+      | python3 -c '
+import json, sys
+d = json.load(sys.stdin)
+for t in d["data"]["activeTargets"]:
+    if t["labels"].get("job") == "askvault" and t.get("health") == "up":
+        print(t["labels"].get("namespace", ""))
+' 2>/dev/null | tr '\n' ' ')"
+    case "$up_targets" in
+      *askvault-prod*) ok "Prometheus scraping askvault-prod (health=up)" ;;
+      *)               bad "askvault-prod is not an 'up' scrape target (got: '${up_targets:-none}')" ;;
+    esac
+    case "$up_targets" in
+      *askvault-dev*)  ok "Prometheus scraping askvault-dev (health=up)" ;;
+      *)               note "askvault-dev not yet 'up' (may still be on its first scrape interval)" ;;
+    esac
+
+    # The end-to-end claim: the application's own metric is retrievable through
+    # PromQL. This is what proves the scrape produces DATA, not just a target.
+    nsamples="$(curl -s --max-time 8 \
+      "http://127.0.0.1:19090/api/v1/query?query=askvault_llm_calls_total" 2>/dev/null \
+      | python3 -c 'import json,sys; print(len(json.load(sys.stdin).get("data",{}).get("result",[])))' 2>/dev/null || echo 0)"
+    [ "${nsamples:-0}" -ge 1 ] \
+      && ok "PromQL returns $nsamples series for askvault_llm_calls_total" \
+      || bad "askvault_llm_calls_total query returned no series — scraping produces no data"
+
+    # Silence the shell's "Killed" job notice: fuser killing the backgrounded
+    # port-forward is normal teardown, but the message lands mid-report and reads
+    # like a failure. Wait for it so it is reaped here, not after the verdict.
+    sudo fuser -k 19090/tcp >/dev/null 2>&1 || true
+    wait 2>/dev/null || true
+  fi
+fi
+
+# The estate Grafana is the READER. Monitoring with no consumer is a shelf of
+# unread dashboards, so the integration claim is: it answers, and it can reach
+# Prometheus across the runtime boundary (a docker container to a clusterIP).
+gcode="$(curl -s -o /dev/null -w '%{http_code}' --max-time 8 http://127.0.0.1:3000/api/health 2>/dev/null || echo 000)"
+if [ "$gcode" = "200" ]; then
+  ok "estate Grafana answers on :3000"
+  prom_ip="$(kc -n monitoring get svc kube-prometheus-stack-prometheus \
+    -o jsonpath='{.spec.clusterIP}' 2>/dev/null)"
+  if [ -n "$prom_ip" ] && docker exec grafana sh -c \
+      "wget -qO- --timeout=5 http://${prom_ip}:9090/-/healthy 2>/dev/null | grep -qi healthy" 2>/dev/null; then
+    ok "Grafana can reach the in-cluster Prometheus (${prom_ip}:9090)"
+  else
+    bad "Grafana cannot reach Prometheus at ${prom_ip:-<no clusterIP>}:9090 — the datasource would fail"
+  fi
+else
+  # NOT a hard failure: the estate Grafana is not part of what this drill builds,
+  # and the rebuild is not supposed to manage it. Its absence means monitoring has
+  # no in-estate reader, which is worth saying out loud but not failing the gate.
+  note "estate Grafana not answering on :3000 (code $gcode) — not built by this drill, so not a gate failure"
+fi
+
 # --- verdict -----------------------------------------------------------------
 printf '\n----------------------------------------\n'
 printf 'PASS %d   FAIL %d\n' "$PASS" "$FAIL"
