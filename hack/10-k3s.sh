@@ -30,6 +30,24 @@ fail() { printf 'FAIL: %s\n' "$1" >&2; exit 1; }
 ok()   { printf '  ok   %s\n' "$1"; }
 note() { printf '  ..   %s\n' "$1"; }
 
+# --- kubectl shim -----------------------------------------------------------
+# BUG FOUND 2026-09-27, before the first post-teardown rebuild:
+#   this script called `kc` three times but never defined it. `kc` is a shim
+#   the other scripts define for themselves:
+#       kc() { sudo -E k3s kubectl "$@"; }
+#   With it missing, every `kc ...` was "command not found" (127) with stderr
+#   redirected to /dev/null, so:
+#     * the 30-iteration "wait for kube-system to settle" loop never saw a pod,
+#       never broke, and silently burned 60s doing nothing;
+#     * `if kc -n kube-system get pods | grep -qi traefik` read EMPTY stdout, so
+#       the guard printed "ok  bundled Traefik is absent" — a FALSE PASS on the
+#       exact collision this script exists to prevent;
+#     * the svclb assertion failed open the same way.
+#   `set -e` never caught it: a failing command on the LEFT of `&&` is exempt
+#   from errexit, so the whole AND-list's non-zero status was not fatal.
+#   Both assertions now run a command that exists.
+kc() { sudo -E k3s kubectl "$@"; }
+
 printf '== k3s ==\n'
 
 if [ -x /usr/local/bin/k3s ]; then
