@@ -160,15 +160,24 @@ spec:
                   key: LLM_TIMEOUT_SECONDS
             # The provider key is a Secret, never a plain env value, and it
             # lives outside this repository -- GitOps manifests are public.
-            # `optional: true` so the pod still starts against the mock
-            # provider; a missing key is a startup-order problem, not a reason
-            # to keep credentials in git.
+            #
+            # NO `optional:` FIELD HERE, AND THAT IS DELIBERATE. The first full
+            # rebuild is what settled it. The prod overlay pins LLM_PROVIDER to
+            # openrouter, so an absent key does NOT fall back to the mock
+            # provider -- the app starts, reports Running and Healthy, claims
+            # provider=openrouter, and answers with a key length of 0 until
+            # somebody asks a question and gets a 502. Silent, and invisible from
+            # outside the pod.
+            #
+            # This is the same argument D31 makes about the ConfigMap refs,
+            # applied to the credential. Without `optional`, a missing Secret
+            # makes the pod fail to start with CreateContainerConfigError naming
+            # the missing key -- loud, and impossible to mistake for working.
             - name: LLM_API_KEY
               valueFrom:
                 secretKeyRef:
                   name: askvault-llm
                   key: api-key
-                  optional: true
           resources:
             # Measured, not guessed: 56.5 MiB RSS idle, 57.0 MiB under load,
             # 6 threads, 13 fds, 24 KiB index. The request sits above the
