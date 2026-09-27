@@ -261,13 +261,28 @@ Refusing to create a Secret that would fail at first use."
            | sudo -E k3s kubectl apply -f - >/dev/null 2>&1; then
         ok "ghcr-pull present in $ns"
       else
-        note "could not create ghcr-pull in $ns"
+        # Hard failure, not a note. A namespace without the pull secret cannot
+        # start its app, so continuing would print "GITOPS OK" over a rebuild
+        # that is visibly broken. Per-namespace on purpose: one namespace
+        # succeeding and one failing is a real partial state, not a pass.
+        fail "could not create ghcr-pull in $ns.
+The app image is ghcr.io/benzac708/askvault and the kubelet resolves
+credentials ONLY from imagePullSecrets (C1) -- containerd registries.yaml is
+not consulted. Without this secret the pod sits in ImagePullBackOff."
       fi
     done
   else
-    note "no ghcr.io entry in ~/.docker/config.json -- cannot create the pull secret."
-    note "the app pod will sit in ImagePullBackOff. Log in first:"
-    note "  echo \$TOKEN | docker login ghcr.io -u <user> --password-stdin"
+    # Hard failure, matching 20-argocd.sh. The previous version only noted this
+    # and carried on to print "GITOPS OK" -- a gate that announces the failure
+    # it just detected, then reports success anyway. 20-argocd.sh already stops
+    # earlier for the same missing credential, but this script can be run on its
+    # own, and on its own it must not under-report.
+    fail "no ghcr.io entry in $HOME/.docker/config.json -- cannot create the pull secret.
+The app pod would sit in ImagePullBackOff, so this is not a recoverable state.
+Log in first:
+  echo \$TOKEN | docker login ghcr.io -u <user> --password-stdin
+Same credential source 20-argocd.sh uses; this is the one undeclared
+prerequisite of the whole rebuild, so it is checked at both ends."
   fi
 # --- 4. the string-match assertion, which is the one that actually bites -----
 proj="$(sudo -E k3s kubectl -n "$ARGOCD_NS" get appproject askvault -o jsonpath='{.spec.sourceRepos[0]}')"
