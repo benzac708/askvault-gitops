@@ -65,8 +65,11 @@ if kc get ns cert-manager >/dev/null 2>&1 \
    && kc -n cert-manager get deploy cert-manager >/dev/null 2>&1; then
   ok "cert-manager already installed"
 else
-  sudo -E helm repo add jetstack https://charts.jetstack.io >/dev/null 2>&1 || true
-  sudo -E helm repo update jetstack >/dev/null
+  # No sudo: repo add/update write to the USER's helm config, not the cluster.
+  # Under sudo they would land in root's ~/.config/helm, giving root a separate
+  # and invisible view of which repositories exist.
+  helm repo add jetstack https://charts.jetstack.io >/dev/null 2>&1 || true
+  helm repo update jetstack >/dev/null
   sudo -E helm upgrade --install cert-manager "$CERT_MGR_CHART" \
     -n cert-manager --create-namespace \
     --set crds.enabled=true --wait --timeout 300s
@@ -76,7 +79,15 @@ fi
 # --- 2. the CRDs, applied by us -----------------------------------------------
 note "applying the monitoring CRDs server-side (see reason 2 in the header)"
 workdir="$(mktemp -d)"
-sudo -E helm pull "$CHART" -d "$workdir" --untar
+# `helm pull` is a pure DOWNLOAD — it talks to the chart repository over HTTPS
+# and needs no cluster access and no kubeconfig. Running it under sudo was a
+# mistake: it wrote root-owned files into a user-owned temp dir, so the cleanup
+# `rm -rf` failed with a wall of "Permission denied" and masked whether the
+# install had worked. It had not.
+#
+# Rule applied here: sudo is for things that need cluster or root access, and
+# nothing else. A download needs neither.
+helm pull "$CHART" -d "$workdir" --untar
 crd_bundle="$workdir/kube-prometheus-stack/charts/crds/files/crds.bz2"
 [ -f "$crd_bundle" ] || fail "CRD bundle not found at $crd_bundle — chart layout changed"
 bunzip2 -c "$crd_bundle" > "$workdir/crds.yaml"
@@ -86,6 +97,26 @@ kc apply --server-side --force-conflicts -f "$workdir/crds.yaml" >/dev/null
 ok "applied $count CRDs server-side"
 rm -rf "$workdir"
 
+# --- 2b. clear any stuck helm record ------------------------------------------
+# A failed `helm upgrade --install` leaves a release secret in
+# `pending-install` (or `pending-upgrade`), and every subsequent attempt dies
+# with "another operation (install/upgrade/rollback) is in progress" forever.
+# Helm will not self-heal this, so it must be cleared before retrying.
+#
+# This matters specifically on a rebuild: the FIRST attempt at this script can
+# fail for a bare-host reason (missing namespace, root-owned temp dir), and
+# without this cleanup the SECOND attempt fails for a completely unrelated
+# reason, hiding the original problem behind a misleading one.
+stuck="$(sudo -E helm list -n "$NS" --pending 2>/dev/null | awk 'NR>1{print $1}' || true)"
+if [ -n "$stuck" ]; then
+  note "clearing stuck helm record: $stuck (left by a failed attempt)"
+  for rel in $stuck; do
+    sudo -E k3s kubectl -n "$NS" delete secret \
+      "sh.helm.release.v1.${rel}.v1" --ignore-not-found >/dev/null 2>&1 || true
+  done
+  ok "cleared"
+fi
+
 # --- 3. the stack -------------------------------------------------------------
 # Sized for a single small node, and deliberately narrow:
 #   alertmanager off   nothing here alerts anywhere
@@ -94,11 +125,15 @@ rm -rf "$workdir"
 #   admissionWebhooks off  see reason 3 in the header
 note "installing $RELEASE"
 sudo -E helm upgrade --install "$RELEASE" "$CHART" -n "$NS" \
+  --create-namespace \
   --skip-crds \
   --set alertmanager.enabled=false \
   --set grafana.enabled=false \
   --set kubeStateMetrics.enabled=false \
-  --set prometheusOperator.admissionWebhooks.enabled=false \
+  --set prometheusOperator.admissionWebhooks.enabled=true \
+  --set prometheusOperator.admissionWebhooks.failurePolicy=IgnoreOnInstallOnly \
+  --set prometheusOperator.admissionWebhooks.certManager.enabled=true \
+  --set prometheusOperator.admissionWebhooks.certManager.admissionCert.duration=8760h \
   --set prometheusOperator.admissionWebhooks.patch.enabled=false \
   --set prometheus.prometheusSpec.retention=3d \
   --set prometheus.prometheusSpec.resources.requests.memory=256Mi \
