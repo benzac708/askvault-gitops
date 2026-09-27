@@ -79,6 +79,12 @@ else
   sudo fuser -k 18443/tcp >/dev/null 2>&1 || true
   nohup sudo -E k3s kubectl -n "$ARGOCD_NS" port-forward svc/argocd-server 18443:443 \
     >/tmp/argocd-accept-pf.log 2>&1 &
+  # disown: this job outlives the argocd checks and stays alive for the rest of
+  # the run. Left in the job table it is a trap for any later `wait` (which is
+  # how an earlier revision of this file hung here) and its eventual death is
+  # reported as a spurious "Killed" line.
+  argo_pf_pid=$!
+  disown "$argo_pf_pid" 2>/dev/null || true
   for _ in $(seq 1 20); do
     curl -sk -o /dev/null --max-time 2 https://localhost:18443/healthz && break
     sleep 1
@@ -259,6 +265,11 @@ if [ -n "$prom_pod" ]; then
   pf_log=/tmp/accept-prom-pf.log
   nohup sudo -E k3s kubectl -n monitoring port-forward "pod/${prom_pod}" 19090:9090 \
     >"$pf_log" 2>&1 &
+  # disown immediately: removes it from the job table so bash does not print
+  # "Killed" when fuser -k terminates it below, and so no later `wait` can
+  # block on it. See the teardown comment.
+  pf_pid=$!
+  disown "$pf_pid" 2>/dev/null || true
   for _ in $(seq 1 20); do
     curl -s -o /dev/null --max-time 2 http://127.0.0.1:19090/-/healthy && break
     sleep 1
@@ -295,11 +306,13 @@ for t in d["data"]["activeTargets"]:
       && ok "PromQL returns $nsamples series for askvault_llm_calls_total" \
       || bad "askvault_llm_calls_total query returned no series — scraping produces no data"
 
-    # Silence the shell's "Killed" job notice: fuser killing the backgrounded
-    # port-forward is normal teardown, but the message lands mid-report and reads
-    # like a failure. Wait for it so it is reaped here, not after the verdict.
+    # Teardown of the port-forward. Killing it makes bash print "Killed" -- that
+    # is job-control reporting a signal, not a failure, but it lands mid-report
+    # and reads like one. There is no `wait` here on purpose: a bare `wait`
+    # blocks on EVERY background job, including the Argo CD port-forward still
+    # alive from section 3, which hung this gate. The job is disowned at launch
+    # instead, so bash never reports its death and nothing here can block.
     sudo fuser -k 19090/tcp >/dev/null 2>&1 || true
-    wait 2>/dev/null || true
   fi
 fi
 
