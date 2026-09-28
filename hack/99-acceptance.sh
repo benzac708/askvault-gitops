@@ -13,6 +13,11 @@ readonly APP_NS="askvault-prod"
 readonly PUBLIC_HOST="${PUBLIC_HOST:-askvault.zachara.dev}"
 readonly NODEPORT_HTTP=30080
 readonly NODEPORT_HTTPS=30443
+# Long enough to cover a full scrape cycle, so a series that is merely RECENT is
+# not mistaken for one that is ABSENT. The ServiceMonitor sets interval=30s and
+# scrapeTimeout=10s, so worst case is one interval plus one timeout plus slack.
+# Overridable so a slow host can be given room without editing the gate.
+readonly PROM_POLL_TIMEOUT="${PROM_POLL_TIMEOUT:-90}"
 
 PASS=0
 FAIL=0
@@ -297,14 +302,114 @@ for t in d["data"]["activeTargets"]:
       *)               note "askvault-dev not yet 'up' (may still be on its first scrape interval)" ;;
     esac
 
-    # The end-to-end claim: the application's own metric is retrievable through
-    # PromQL. This is what proves the scrape produces DATA, not just a target.
-    nsamples="$(curl -s --max-time 8 \
-      "http://127.0.0.1:19090/api/v1/query?query=askvault_llm_calls_total" 2>/dev/null \
-      | python3 -c 'import json,sys; print(len(json.load(sys.stdin).get("data",{}).get("result",[])))' 2>/dev/null || echo 0)"
-    [ "${nsamples:-0}" -ge 1 ] \
-      && ok "PromQL returns $nsamples series for askvault_llm_calls_total" \
-      || bad "askvault_llm_calls_total query returned no series — scraping produces no data"
+    # THE CLAIM IS TWO CLAIMS, AND THE GATE PREVIOUSLY FUSED THEM INTO ONE.
+    #
+    #   (1) the app emits askvault_llm_calls_total and incremented it when it
+    #       answered the question in section 5 -- authoritative and IMMEDIATE,
+    #       read straight off the container, with no Prometheus involved;
+    #   (2) Prometheus has scraped that value into a queryable series -- NOT
+    #       immediate. interval=30s with scrapeTimeout=10s, so a series lags the
+    #       increment by up to roughly 30s.
+    #
+    # Tested as one fused assertion with no wait, a completely healthy run
+    # failed, and the message asserted a cause it had never established --
+    # "scraping produces no data" -- while scraping worked perfectly
+    # (finding 24: PASS 43 / FAIL 1, on a green rebuild). The split is the fix,
+    # not a longer sleep: a sleep hides the race and taxes every subsequent run,
+    # whereas two checks let a failure name which half is broken.
+    app_metrics="$(kc -n "$APP_NS" exec deploy/askvault -- \
+      python -c "import urllib.request; print(urllib.request.urlopen('http://127.0.0.1:8000/metrics').read().decode())" 2>/dev/null || true)"
+    app_counter="$(printf '%s\n' "$app_metrics" | grep -E '^askvault_llm_calls_total\{' | head -1 || true)"
+    app_value="$(printf '%s' "$app_counter" | awk '{print $NF}' | head -1)"
+    app_value="${app_value%%.*}"
+    case "$app_value" in
+      ''|*[!0-9]*) app_value=0 ;;
+    esac
+    # Computed up front, and NOT as `grep ... || printf fallback` inside the
+    # failure message: in a pipeline the exit status is sed's, so that fallback
+    # could never fire and would be a branch that only looks like it explains the
+    # empty case. Caught by testing, before it shipped.
+    app_llm_lines="$(printf '%s\n' "$app_metrics" | grep -i 'llm' | head -5 || true)"
+    [ -n "$app_llm_lines" ] || app_llm_lines="(nothing on /metrics mentions llm at all)"
+
+    if [ -z "$app_metrics" ]; then
+      bad "could not read /metrics from the app container at all (exec failed or returned empty).
+  This check therefore proves NOTHING either way, and must not be read as either
+  an app defect or a scraping one. Whether the pod is alive is a separate and
+  already-reported claim -- see the /healthz in-cluster check in section 4."
+    elif [ "$app_value" -ge 1 ]; then
+      ok "app emits askvault_llm_calls_total and has incremented it to ${app_value}: ${app_counter}"
+    else
+      bad "the app is alive but its /metrics shows no askvault_llm_calls_total sample at 1 or more.
+  This is an APPLICATION defect, not a scraping one, and the split is what makes
+  that assertable: the line above is read directly off the container and no
+  Prometheus was consulted. Expected a sample of the form
+    askvault_llm_calls_total{outcome=\"...\",provider=\"...\"} <value>
+  and the app exposed:
+$(printf '%s\n' "$app_llm_lines" | sed 's/^/    /')
+  A registered counter that is never incremented produces NO sample at all, so
+  nothing downstream -- scrape, PromQL, Grafana, this gate -- can ever observe a
+  call. That silence is the defect; it does not look like one."
+    fi
+
+    # (2) propagation: bounded, and COMPARED against the value the app itself
+    # reports. Comparing is what makes this correct on a REPEAT run. Prometheus
+    # retains a stale series for about 5 minutes after its target disappears, so
+    # a check that merely asks "does any series exist" is satisfied instantly by
+    # the PREVIOUS run's value and passes while this run's increment sits
+    # un-scraped -- a green check for the wrong reason, which is this project's
+    # one recurring bug class. This poll only finishes once Prometheus has caught
+    # up with the number the app is itself reporting.
+    if [ "$app_value" -ge 1 ]; then
+      prop_deadline=$(( $(date +%s) + PROM_POLL_TIMEOUT ))
+      prop_attempt=0
+      prom_value=0
+      while :; do
+        prop_attempt=$(( prop_attempt + 1 ))
+        prom_value="$(curl -s --max-time 8 \
+          "http://127.0.0.1:19090/api/v1/query?query=askvault_llm_calls_total" 2>/dev/null \
+          | python3 -c 'import json,sys
+try:
+    r = json.load(sys.stdin).get("data", {}).get("result", [])
+    print(max(float(x["value"][1]) for x in r))
+except Exception:
+    print(0)' 2>/dev/null || echo 0)"
+        prom_value="${prom_value%%.*}"
+        case "$prom_value" in
+          ''|*[!0-9]*) prom_value=0 ;;
+        esac
+        if [ "$prom_value" -ge "$app_value" ]; then
+          break
+        fi
+        if [ "$(date +%s)" -ge "$prop_deadline" ]; then
+          break
+        fi
+        note "Prometheus has ${prom_value}, the app has ${app_value} -- waiting for the next 30s scrape (poll ${prop_attempt})"
+        sleep 10
+      done
+
+      if [ "$prom_value" -ge "$app_value" ]; then
+        ok "PromQL returned askvault_llm_calls_total=${prom_value}, matching the app's own ${app_value} (after ${prop_attempt} poll(s))"
+      else
+        bad "Prometheus did not reach the app's own counter within ${PROM_POLL_TIMEOUT}s.
+  the app reports ${app_value}; Prometheus reports ${prom_value} after ${prop_attempt} poll(s).
+  The previous check proved the app emits and increments this metric, so the app
+  is exonerated and this is purely a scraping claim. The two remaining causes
+  are separated by these commands, not by guesswork:
+    # 1. is the target up, and did its last scrape SUCCEED? (look for lastError)
+    curl -s http://127.0.0.1:19090/api/v1/targets | python3 -m json.tool | less
+    # 2. what does Prometheus hold for this namespace, with no metric filter?
+    curl -s --get --data-urlencode 'query={namespace=\"${APP_NS}\"}' \
+      http://127.0.0.1:19090/api/v1/query
+  target present but no series -> the scrape is failing on CONTENT; the targets
+  page carries the reason. Target absent -> the ServiceMonitor stopped matching,
+  which after a namespace or label change is indistinguishable from a broken
+  scrape unless you look."
+      fi
+    else
+      note "propagation check not evaluated: the app has not incremented the counter,
+  so there is nothing yet to wait for. The check above already reported why."
+    fi
 
     # Teardown of the port-forward. Killing it makes bash print "Killed" -- that
     # is job-control reporting a signal, not a failure, but it lands mid-report
