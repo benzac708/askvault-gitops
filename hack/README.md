@@ -10,6 +10,19 @@ It asks for the OpenRouter key at a hidden prompt, runs every step in
 dependency order, stops at the first failure, and exits non-zero if any step
 failed. `--from <step>`, `--only <a,b>` and `--list` narrow it.
 
+The **whole drill** — destroy the host to 0%, then rebuild it and gate the
+result — is also one command:
+
+```bash
+bash ~/repos/askvault/hack/rebuild.sh --from-zero --yes
+```
+
+That runs `90-teardown.sh --yes` first and then all nine steps. It is the only
+mode that destroys the cluster, so it requires a typed `yes` (or `--yes`) and
+refuses without a terminal. Use it rather than running `90-teardown.sh` and
+then typing the rebuild by hand: that seam used to be bridged by a hand-typed
+list printed at the bottom of the teardown, and the list had already drifted.
+
 The scripts are numbered so the **sort order is the dependency order**. Each one
 is idempotent, declares its prerequisite, and asserts its own result rather
 than trusting that a command succeeded.
@@ -24,15 +37,17 @@ than trusting that a command succeeded.
 | `45-reset-app.sh` | **Drop the app layer** (2 Applications, 2 namespaces) so 50 builds it from nothing. Skips on a clean host. | 20, 40 |
 | `50-gitops.sh` | Deploy key, repo registration, AppProject + Applications, both secrets | 20, 40, 45 |
 | `31-monitoring.sh` | kube-prometheus-stack, ServiceMonitor, estate Grafana wiring | 50 |
-| `rebuild.sh` | **Runs the whole rebuild in order.** Not a step in it. | — |
-| `90-teardown.sh` | Destroy in the correct order. Dry-run by default. | — |
+| `rebuild.sh` | **Runs the whole rebuild in order.** `--from-zero` tears down first. Not a step in it. | — |
+| `90-teardown.sh` | Destroy in the correct order. Dry-run by default. Ends by printing one command. | — |
 | `95-export-sanitise.sh` | Render section 6 for publication; **fails** on any hostname leak | — |
 | `99-acceptance.sh` | The drill gate. Read-only. | 50, 31 |
+| `rebuild.test.sh` | Unit tests for the orchestrator. Touches no cluster. | — |
 
 ## Order that matters
 
 ```
 rebuild:   00 → 10 → 20 → 30 → 40 → 45 → 50 → 31 → 99   (or: hack/rebuild.sh)
+from-zero: 90-teardown --yes → then the nine steps above  (hack/rebuild.sh --from-zero --yes)
 teardown:  Applications → app namespaces → helm releases → argocd ns → CRDs
 ```
 
@@ -111,12 +126,26 @@ do for you. Naming the gap is worth more than pretending there isn't one.
 5. **Assert from outside.** A probe that returns 200 in-cluster is a different
    claim from the same path returning 404 at the edge. Both are checked.
 6. **Destruction requires `--yes`.** `90-teardown.sh` is dry-run by default.
-   `rebuild.sh` is the deliberate exception: `45-reset-app.sh` deletes two
-   Applications and two namespaces, and `rebuild.sh` takes no `--yes`. That
-   asymmetry is the point — `45` is scoped to two namespaces by name and
-   rebuilt six steps later, whereas `90` takes the cluster itself and cannot be
-   rebuilt by `rebuild.sh` at all. A confirmation prompt belongs where the
-   blast radius is unrecoverable, not on a step that restores what it removes.
+   A plain `rebuild.sh` is the deliberate exception: `45-reset-app.sh` deletes
+   two Applications and two namespaces, and plain `rebuild.sh` takes no
+   `--yes`. That asymmetry is the point — `45` is scoped to two namespaces by
+   name and rebuilt six steps later, whereas `90` takes the cluster itself.
+   A confirmation prompt belongs where the blast radius is unrecoverable, not
+   on a step that restores what it removes.
+
+   `--from-zero` removes the asymmetry, because it runs `90` inside `rebuild.sh`.
+   So it asks for a typed `yes`, and refuses outright without a tty. `--yes` is
+   **rejected when it appears without `--from-zero`** rather than quietly
+   ignored: a flag that authorises nothing while claiming to authorise
+   something is worse than no flag at all.
+
+   Two more rules `--from-zero` obeys, each because the alternative is a way to
+   lose a working host:
+   - **The credential is collected before the teardown.** A missing key must
+     not be learned by destroying the cluster that could have asked again.
+   - **It requires `99-acceptance` in the selection.** `--from-zero --only
+     10-k3s` would destroy everything and rebuild a fragment, then call it
+     success. That is a mistake, not a use case, so it is refused.
 7. **The orchestrator counts failures.** `for s in …; do … || break; done`
    exits **0** when a step fails, because `break` leaves the loop's status at
    zero and `set -e` exempts the left side of `||`. That makes a rebuild that
@@ -131,6 +160,37 @@ do for you. Naming the gap is worth more than pretending there isn't one.
    value is `export`ed so the child `50-gitops.sh` sees it and does not ask a
    second time. An empty key is refused: an empty Secret value satisfies a
    required `secretKeyRef`, so the pod would start and answer nothing.
+9. **A sequence written twice is wrong in one of the two places.** The teardown
+   used to end by printing a hand-typed copy of the rebuild order — and it was
+   already missing `45-reset-app.sh`. That copy is what a reader is told to
+   follow at the exact moment they have destroyed their cluster, and following
+   it rebuilt a warm app layer, so the run never reached the code finding 21a
+   was about. Same shape as 21a: a green run that quietly proved less than it
+   claimed. There is no list at the bottom of `90-teardown.sh` now. It prints
+   one command, and `rebuild.sh` prints the order. Nothing to keep in sync.
+10. **"0%" has to be true of every copy.** The teardown verified
+    `/etc/rancher/k3s/k3s.yaml` was gone and called the host clean — while a
+    second copy of the same cluster-admin credential sat in `~/.kube/config`,
+    installed by the finding 23 fix, which the teardown did not know about. The
+    check covered the file the reader thinks of and not the file the reader
+    uses. A credential is a credential wherever it is kept, so the teardown now
+    removes it and asserts on it (`--keep-k3s` is the exception: the cluster
+    survives, so its credential must too).
+
+## Tests
+
+The orchestrator is the part that has broken most often, so it is the part
+with tests:
+
+```bash
+bash ~/repos/askvault/hack/rebuild.test.sh
+```
+
+51 assertions, no cluster, no network, a few seconds. It drives the real
+`rebuild.sh` and `90-teardown.sh` with stubbed steps and asserts on **the
+order things happened in** — in particular that a missing credential refuses
+*before* the teardown runs, which is the property that stops a missing key from
+costing you a working cluster. Run it after any edit to either script.
 
 ## What these scripts cannot reproduce
 

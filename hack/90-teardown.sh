@@ -55,6 +55,21 @@
 #   ./90-teardown.sh --yes --keep-k3s    namespaces only, leave the cluster
 #
 # Destruction requires an explicit second signal, on purpose.
+#
+# ============================================================================
+# THE FULL DRILL IS ONE COMMAND, AND THIS SCRIPT'S OWN FOOTER USED TO PREVENT IT
+# ============================================================================
+#
+#   ./rebuild.sh --from-zero --yes    tear this host down to 0%, then rebuild it
+#
+# That runs this script with --yes, then rebuild.sh's nine steps. Prefer it over
+# running this script and then typing the rebuild by hand, because this script's
+# closing message used to hand the operator a HAND-TYPED list of eight steps --
+# and that list was missing 45-reset-app.sh entirely. It was a second copy of a
+# sequence that rebuild.sh already owns, written in the wrong file, therefore
+# already wrong, and it is what a reader was told to follow at the exact moment
+# they had just destroyed their cluster. The list is gone. There is one command
+# and one place the order is written down.
 
 set -euo pipefail
 
@@ -66,6 +81,14 @@ readonly INFRA_NAMESPACES=(monitoring traefik cert-manager)
 # belongs to the wider estate. An allowlist rather than a pattern, because a
 # pattern like "askvault*" would match a container someone names by accident.
 readonly OUR_CONTAINERS=(askvault-9h-time)
+
+# Where this script lives, so the closing message can name a command that works.
+# Not `${0%/*}`: when the script is invoked as `90-teardown.sh` with no slash in
+# argv[0], that expansion returns the WHOLE string, and the footer would print
+# "90-teardown.sh/rebuild.sh" -- a command that cannot be run, printed by the
+# script whose entire job at that moment is to tell the reader what to type.
+HACK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+readonly HACK_DIR
 
 CONFIRMED=0
 KEEP_K3S=0
@@ -314,6 +337,46 @@ else
     sudo systemctl daemon-reload
     ok "removed k3s unit drop-in"
   fi
+
+  # The per-user kubeconfig is the SAME cluster-admin credential in a SECOND
+  # place. 10-k3s.sh puts it there (the finding 23 fix: mode 600, owned by the
+  # human, so `kubectl` works without sudo), which means finding 23's fix
+  # introduced a piece of teardown-relevant state that this script did not know
+  # about -- and every check in step 9 reads /etc/rancher/k3s/k3s.yaml, so all
+  # of them would have called this host 0% while it was not.
+  #
+  # Two reasons it has to go:
+  #   1. A working cluster-admin token for a cluster that no longer exists is
+  #      not "0%". It is the one artifact a reader would most want gone.
+  #   2. ~/.bashrc still exports KUBECONFIG="$HOME/.kube/config", so between the
+  #      teardown and the rebuild the human's shell gets the EXACT finding-23
+  #      symptom -- x509 "certificate signed by unknown authority" -- against a
+  #      file whose CA belongs to no live cluster. That is a confusing way to
+  #      spend ten minutes after a deliberate destruction.
+  #
+  # 10-k3s.sh reinstalls the per-user kubeconfig unconditionally on every
+  # rebuild, so removing it is self-healing. The removal itself is NOT here --
+  # it is deliberately outside this if/elif/else, see below.
+fi
+
+# The per-user kubeconfig, removed whenever the cluster is being destroyed --
+# including on a host where k3s is already uninstalled, which is the state a
+# previous teardown leaves behind. That state is exactly when a stale
+# cluster-admin credential is most likely to be sitting there, so gating this
+# on "k3s-uninstall.sh exists" would have skipped the one host that needs it.
+#
+# Inside `KEEP_K3S -eq 0` on purpose: with --keep-k3s the cluster SURVIVES, and
+# taking away the credential for a live cluster would break a working host.
+if [ "$KEEP_K3S" -eq 0 ]; then
+  step "8b. the per-user cluster-admin credential"
+  if [ -f "$HOME/.kube/config" ]; then
+    if gate "rm -f \$HOME/.kube/config (per-user cluster-admin credential)"; then
+      rm -f "$HOME/.kube/config"
+      ok "removed the per-user kubeconfig (cluster-admin credential for a cluster that no longer exists)"
+    fi
+  else
+    note "no per-user kubeconfig present"
+  fi
 fi
 
 # ============================================================================
@@ -329,6 +392,13 @@ else
     [ -d /etc/rancher/k3s ] && fail "/etc/rancher/k3s still present" || ok "/etc/rancher/k3s gone"
     [ -d /var/lib/kubelet ] && fail "/var/lib/kubelet still present" || ok "/var/lib/kubelet gone"
     [ -d /var/lib/cni ] && fail "/var/lib/cni still present" || ok "/var/lib/cni gone"
+    # The second copy of the credential, in the place a human's shell reads.
+    # Every other line in this block reads /etc/rancher/k3s/k3s.yaml, so without
+    # this one the teardown would certify a host that still hands out
+    # cluster-admin access to a cluster that no longer exists.
+    [ -f "$HOME/.kube/config" ] \
+      && fail "$HOME/.kube/config still present — a cluster-admin credential survives the teardown" \
+      || ok "per-user kubeconfig gone"
     systemctl is-active --quiet k3s && fail "k3s unit still active" || ok "k3s unit inactive"
   fi
 
@@ -350,5 +420,10 @@ fi
 
 printf '\nTEARDOWN %s\n' "$([ "$CONFIRMED" -eq 1 ] && echo COMPLETE || echo 'PLANNED (dry run)')"
 printf 'LEFT RUNNING, by design: cloudflared, Caddy, and every other estate service.\n'
-printf 'TO REBUILD: hack/00-preflight.sh -> 10-k3s.sh -> 20-argocd.sh -> 30-traefik.sh\n'
-printf '            -> 40-cloudflare.sh -> 50-gitops.sh -> 31-monitoring.sh -> 99-acceptance.sh\n'
+# ONE command, and no list. This used to print a hand-typed copy of the step
+# order that had already drifted -- it was missing 45-reset-app.sh. A sequence
+# written twice is a sequence that is wrong in one of the two places, and this
+# was the wrong one, shown to the reader immediately after they destroyed their
+# cluster. rebuild.sh prints the order itself; there is nothing to keep in sync.
+printf 'TO REBUILD: bash %s/rebuild.sh\n' "$HACK_DIR"
+printf 'FULL DRILL (tear down AND rebuild in one command): bash %s/rebuild.sh --from-zero --yes\n' "$HACK_DIR"

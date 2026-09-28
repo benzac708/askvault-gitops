@@ -55,14 +55,33 @@
 #   dependency. Believing otherwise yields a green run with an empty dashboard,
 #   or a run whose secrets landed in a namespace that was never created.
 #
-# ON DESTRUCTION -- this script is no longer purely additive, and used to claim
-#   it was. 45-reset-app.sh deletes two Applications and two namespaces, so the
-#   old "this does not destroy anything" comment became false the moment that step
-#   was added, and a header that lies about blast radius is worse than no header.
-#   It still takes no --yes gate, and the reasoning still holds but narrower: what
-#   it drops is scoped to the two askvault namespaces by name and is rebuilt six
-#   steps later, whereas 90-teardown.sh takes the cluster itself and cannot be
-#   rebuilt by this script at all. That asymmetry is where confirmation belongs.
+# FIFTH JOB: be the whole drill, not half of it.
+#   Until --from-zero existed, the drill was two commands and the seam between
+#   them was a hand-typed list printed by 90-teardown.sh. That list had already
+#   drifted -- it was missing 45-reset-app.sh -- and a reader who trusted it
+#   after a teardown would have rebuilt a warm app layer and never reached the
+#   code that finding 21a was about. That is not a documentation bug, it is a
+#   silent downgrade of the claim, and it is the same shape as 21a itself.
+#   So: one command, one order, one place it is written down.
+#
+# ON DESTRUCTION -- read this twice, because it is the part that changes.
+#   A plain `rebuild.sh` is additive apart from 45-reset-app.sh, which drops two
+#   Applications and two namespaces BY NAME and 50-gitops.sh recreates them a
+#   few steps later. That asymmetry is why a plain run needs no --yes and never
+#   did: what it drops is scoped and rebuilt, whereas 90-teardown.sh takes the
+#   cluster itself.
+#
+#   `rebuild.sh --from-zero` removes that asymmetry, because it runs the
+#   teardown. So --from-zero asks for a typed confirmation, refuses outright
+#   without a tty, and requires --yes to skip the prompt. --yes is REJECTED
+#   when it appears without --from-zero rather than quietly ignored: a flag that
+#   authorises nothing and says it authorised something is worse than no flag.
+#
+#   The order inside this file is therefore not only a dependency order. The
+#   credential gate must be able to refuse, and a refusal that arrives AFTER the
+#   cluster is destroyed is a refusal that cost the operator their cluster. So
+#   the teardown sits after the key is in hand and before step 1, and nothing
+#   else in this script may move across that line.
 
 set -euo pipefail
 
@@ -98,6 +117,9 @@ USAGE
   rebuild.sh --from 50-gitops        start at a step, continue to the end
   rebuild.sh --only 50-gitops,99-acceptance
                                       run just these, in the order given
+  rebuild.sh --from-zero             DESTROY first (90-teardown --yes), then
+                                      rebuild from nothing
+  rebuild.sh --from-zero --yes       same, without the confirmation prompt
   rebuild.sh --list                   print the step order and exit
   rebuild.sh --help                   this text
 
@@ -110,6 +132,16 @@ NOTES
   The run stops at the first failing step on purpose. Running the remaining
   steps on a broken foundation produces a second, misleading failure that
   hides the first one.
+
+  --from-zero is the whole drill in one command, and the only mode that
+  destroys the cluster. Three rules it obeys, each because the alternative is
+  a way to lose a working host:
+    - The credential is collected BEFORE the teardown. A missing key must not
+      be learned by destroying the cluster that could have asked again.
+    - It requires 99-acceptance in the selection. --from-zero --only 10-k3s
+      would destroy everything and rebuild a fragment. That is a mistake, not
+      a use case, so it is refused rather than performed.
+    - It asks for confirmation unless --yes, and refuses outright without a tty.
 HELP
 }
 
@@ -125,9 +157,22 @@ is_step() {
 mode=full
 want=""
 steps=()
+from_zero=0
+assume_yes=0
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
+    --from-zero)
+      from_zero=1
+      shift
+      ;;
+    --yes|-y)
+      # Only meaningful with --from-zero, and checked for that below rather than
+      # accepted silently: a bare `--yes` that quietly does nothing is a flag
+      # that lies about what it authorised.
+      assume_yes=1
+      shift
+      ;;
     --from)
       [ "$#" -ge 2 ] || { fail "--from needs a step name"; usage >&2; exit 2; }
       mode=from
@@ -189,6 +234,37 @@ esac
 
 [ "${#steps[@]}" -gt 0 ] || { fail "no steps selected"; exit 2; }
 
+# --- --from-zero safety gate --------------------------------------------------
+# A flag that authorises destroying the cluster is checked here, before any
+# secret is read and long before anything is destroyed.
+if [ "$assume_yes" -eq 1 ] && [ "$from_zero" -eq 0 ]; then
+  fail "--yes only means something together with --from-zero"
+  note "--from-zero destroys the cluster. On its own, this run is additive:"
+  note "  45-reset-app.sh drops two Applications and two namespaces by name,"
+  note "  and 50-gitops.sh recreates them a few steps later. That asymmetry is"
+  note "  why a plain rebuild.sh needs no confirmation and --from-zero does."
+  exit 2
+fi
+
+if [ "$from_zero" -eq 1 ]; then
+  has_gate=0
+  for s in "${steps[@]}"; do
+    if [ "$s" = "99-acceptance" ]; then has_gate=1; break; fi
+  done
+  # The gate is what turns "the cluster came back" into "the cluster came back
+  # correctly". A destructive run that does not end in the gate rebuilds a
+  # fragment and calls it success, which is the failure mode this whole project
+  # keeps rediscovering one layer up.
+  if [ "$has_gate" -eq 0 ]; then
+    fail "--from-zero refuses a selection that does not include 99-acceptance"
+    note "The teardown removes the whole cluster. Rebuilding only"
+    note "  ${steps[*]}"
+    note "and skipping the gate would leave a fragment and report success."
+    note "Use --from-zero on its own, or with --from, or add 99-acceptance."
+    exit 2
+  fi
+fi
+
 # --- the one prerequisite, COLLECTED before step 1 ---------------------------
 # Resolved here, not discovered at step 7. Same reasoning as 00-preflight.sh: a
 # precondition must require only what the run actually needs, and it must
@@ -208,6 +284,10 @@ case "$mode" in
   from) note "from $want onward, ${#steps[@]} steps" ;;
   only) note "only ${steps[*]}, ${#steps[@]} steps" ;;
 esac
+if [ "$from_zero" -eq 1 ]; then
+  note "FROM ZERO: the cluster is destroyed first, then rebuilt from nothing"
+  note "the estate is not touched: cloudflared, Caddy and every other service stay"
+fi
 
 if [ "$needs_key" -eq 1 ]; then
   if [ -n "${OPENROUTER_API_KEY:-}" ]; then
@@ -254,6 +334,67 @@ else
 fi
 printf '\n'
 
+# --- the teardown, and WHY it sits here and not earlier ------------------------
+# Order is load-bearing in this file for a reason that has nothing to do with
+# dependencies: the credential gate above must be able to REFUSE, and a refusal
+# after the cluster is destroyed is a refusal that cost the operator everything.
+# So the teardown runs after the key is in hand and before step 1. Nothing else
+# in the script may move across that line.
+teardown_ran=0
+if [ "$from_zero" -eq 1 ]; then
+  td_script="$HACK_DIR/90-teardown.sh"
+  if [ ! -f "$td_script" ]; then
+    fail "--from-zero needs $td_script, and it is not there"
+    exit 1
+  fi
+
+  if [ "$assume_yes" -eq 0 ]; then
+    if [ ! -t 0 ]; then
+      fail "--from-zero destroys the cluster and stdin is not a terminal"
+      note "nothing was destroyed. Re-run with --yes to authorise it:"
+      note "  bash $HACK_DIR/rebuild.sh --from-zero --yes"
+      note "or, to rebuild WITHOUT destroying, drop the flag:"
+      note "  bash $HACK_DIR/rebuild.sh"
+      exit 1
+    fi
+    # Ask about the one thing that cannot be undone. The prompt names the
+    # consequence and the count, because "are you sure?" on its own is answered
+    # reflexively by whoever typed the command that got them here.
+    printf 'This DESTROYS the k3s cluster, all its namespaces and the askvault app.\n'
+    printf 'cloudflared, Caddy and every other estate service are left alone.\n'
+    printf 'It is then rebuilt from nothing and checked by the gate. Type yes to continue: '
+    answer=""
+    read -r answer || true
+    if [ "$answer" != "yes" ]; then
+      fail "not confirmed (got '${answer:-nothing}') -- nothing was destroyed"
+      note "to rebuild WITHOUT destroying the cluster, drop --from-zero:"
+      note "  bash $HACK_DIR/rebuild.sh"
+      exit 1
+    fi
+  fi
+
+  t0=$(date +%s)
+  printf -- '---------- 90-teardown ----------\n'
+  if bash "$td_script" --yes; then
+    td_rc=0
+  else
+    td_rc=$?
+  fi
+  t1=$(date +%s)
+  teardown_ran=1
+  if [ "$td_rc" -eq 0 ]; then
+    printf -- '---------- 90-teardown  PASS  (%ss)\n\n' "$((t1 - t0))"
+  else
+    printf -- '---------- 90-teardown  FAIL  rc=%s  (%ss)\n\n' "$td_rc" "$((t1 - t0))"
+    printf '== summary ==\n'
+    note "cluster destroyed, teardown then FAILED rc=$td_rc after $((t1 - t0))s"
+    note "the host is at 0% right now -- the rebuild was NOT started"
+    note "resume:   bash $HACK_DIR/rebuild.sh"
+    printf '\nREBUILD FAILED at 90-teardown (rc=%s)\n' "$td_rc"
+    exit 1
+  fi
+fi
+
 passed=0
 failed=""
 rc=0
@@ -290,10 +431,17 @@ done
 total=$(( $(date +%s) - start_all ))
 
 # --- summary -----------------------------------------------------------------
+# --from-zero did one more unit of real work than the step list, so the tally
+# mentions it. A summary that reports 9/9 for a run that also destroyed a
+# cluster is undercounting by exactly the part an operator would want to see.
 printf '== summary ==\n'
 
 if [ -z "$failed" ]; then
-  ok "$passed/${#steps[@]} steps passed in ${total}s"
+  if [ "$teardown_ran" -eq 1 ]; then
+    ok "$passed/${#steps[@]} steps passed, plus the teardown, in ${total}s"
+  else
+    ok "$passed/${#steps[@]} steps passed in ${total}s"
+  fi
   printf '\nREBUILD COMPLETE\n'
   exit 0
 fi
