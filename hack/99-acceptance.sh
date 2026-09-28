@@ -285,17 +285,39 @@ if [ -n "$prom_pod" ]; then
 Log:
 $(sed 's/^/    /' "$pf_log" 2>/dev/null | head -5)"
   else
-    up_targets="$(curl -s --max-time 8 "http://127.0.0.1:19090/api/v1/targets" 2>/dev/null \
-      | python3 -c '
+    # One-shot, this check raced the FIRST scrape. 50-gitops (re)deployed the
+    # app moments ago; the ServiceMonitor scrapes on a 30s interval with a 10s
+    # timeout, so /targets can legitimately show nothing on a completely
+    # healthy rebuild -- observed 2026-09-28: FAIL here, then the metric poll
+    # below proved the SAME Prometheus had scraped the series within ~30s.
+    # Poll like the metric check does. No stale-green trap: /api/v1/targets
+    # lists CURRENT active targets only, never a retained series, so an 'up'
+    # here is always this instance -- the old run can not satisfy this one.
+    tgt_deadline=$(( $(date +%s) + PROM_POLL_TIMEOUT ))
+    tgt_attempt=0
+    up_targets=""
+    while :; do
+      tgt_attempt=$(( tgt_attempt + 1 ))
+      up_targets="$(curl -s --max-time 8 "http://127.0.0.1:19090/api/v1/targets" 2>/dev/null \
+        | python3 -c '
 import json, sys
 d = json.load(sys.stdin)
 for t in d["data"]["activeTargets"]:
     if t["labels"].get("job") == "askvault" and t.get("health") == "up":
         print(t["labels"].get("namespace", ""))
 ' 2>/dev/null | tr '\n' ' ')"
+      case "$up_targets" in
+        *askvault-prod*) break ;;
+      esac
+      if [ "$(date +%s)" -ge "$tgt_deadline" ]; then
+        break
+      fi
+      note "askvault-prod not yet an 'up' scrape target -- waiting for the next 30s scrape (poll ${tgt_attempt})"
+      sleep 10
+    done
     case "$up_targets" in
-      *askvault-prod*) ok "Prometheus scraping askvault-prod (health=up)" ;;
-      *)               bad "askvault-prod is not an 'up' scrape target (got: '${up_targets:-none}')" ;;
+      *askvault-prod*) ok "Prometheus scraping askvault-prod (health=up, after ${tgt_attempt} poll(s))" ;;
+      *)               bad "askvault-prod is not an 'up' scrape target (got: '${up_targets:-none}') after ${PROM_POLL_TIMEOUT}s of polling" ;;
     esac
     case "$up_targets" in
       *askvault-dev*)  ok "Prometheus scraping askvault-dev (health=up)" ;;
