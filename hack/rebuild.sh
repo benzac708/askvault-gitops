@@ -24,22 +24,45 @@
 #   that passes for the wrong reason — it is worse, because an assertion is
 #   noticed and a gate is trusted.
 #
-# SECOND JOB: fail BEFORE burning eight minutes.
+# SECOND JOB: COLLECT THE CREDENTIAL, before burning eight minutes.
 #   50-gitops.sh builds the askvault-llm secret from OPENROUTER_API_KEY. Finding
 #   that out at step 7 of 8, after six green steps, is an expensive way to learn
-#   about a missing variable. An undeclared prerequisite that fails loudly up
-#   front beats one that fails halfway.
+#   about a missing variable -- so this asks for it up front, which is the entire
+#   point of a preflight. It used to REFUSE here and print an export line for the
+#   operator to run, which made the one command that rebuilds everything into two
+#   commands and put a hand-typed credential on the command line where it lands
+#   in shell history. Asking is strictly better than refusing, and refusing was
+#   only ever a way of not implementing the ask.
 #
-# THIRD JOB: state the order ONCE, with the reason.
-#   The number prefix reads like it encodes the sequence. It does not.
-#   31-monitoring.sh runs AFTER 50-gitops.sh, not before it, because a
-#   ServiceMonitor has nothing to scrape until the Deployment exists. Numbering
-#   is thematic, order is dependency. Believing otherwise yields a green run
-#   with an empty dashboard.
+#   Three-way behaviour, identical to 50-gitops.sh's own, because a script that
+#   collects a secret one way in two places is a script that will one day
+#   collect it two ways:
+#     set        -> use it
+#     unset, tty -> prompt, no echo, no history, no file
+#     unset, no tty (CI, ssh without -t) -> refuse, and say exactly what to do
 #
-# No --yes gate, deliberately: unlike 90-teardown.sh this does not destroy
-# anything. It is additive. The one destructive thing in the drill is teardown,
-# and that is where the confirmation belongs.
+# THIRD JOB: make "rebuild" mean rebuild.
+#   45-reset-app.sh drops the app layer so 50-gitops.sh creates it from nothing
+#   on every run. Without it a warm cluster takes the "namespace already exists"
+#   branch, which prints ok and exits 0 and never reaches the code that finding
+#   21a was about. A rebuild that inherits its own output is a refresh, and it
+#   proves less each time it is run.
+#
+# FOURTH JOB: state the order ONCE, with the reason.
+#   The number prefix reads like it encodes the sequence. It does not, and this
+#   array is now the clearest possible demonstration: 45-reset-app runs BEFORE
+#   50-gitops, and 31-monitoring runs AFTER it. Numbering is thematic, order is
+#   dependency. Believing otherwise yields a green run with an empty dashboard,
+#   or a run whose secrets landed in a namespace that was never created.
+#
+# ON DESTRUCTION -- this script is no longer purely additive, and used to claim
+#   it was. 45-reset-app.sh deletes two Applications and two namespaces, so the
+#   old "this does not destroy anything" comment became false the moment that step
+#   was added, and a header that lies about blast radius is worse than no header.
+#   It still takes no --yes gate, and the reasoning still holds but narrower: what
+#   it drops is scoped to the two askvault namespaces by name and is rebuilt six
+#   steps later, whereas 90-teardown.sh takes the cluster itself and cannot be
+#   rebuilt by this script at all. That asymmetry is where confirmation belongs.
 
 set -euo pipefail
 
@@ -56,7 +79,8 @@ readonly ALL_STEPS=(
   20-argocd       # GitOps. Needs the cluster.
   30-traefik      # ingress. Needs the cluster.
   40-cloudflare   # edge rule -> Traefik NodePort. Needs 30.
-  50-gitops       # the app. Needs Argo CD (20) and a published endpoint (40).
+  45-reset-app    # app layer back to nothing, so 50 creates it. Skips if no cluster.
+  50-gitops       # the app. Needs Argo CD (20), a published endpoint (40), a cold app.
   31-monitoring   # AFTER 50, not before: the ServiceMonitor scrapes the app.
   99-acceptance   # the gate. Needs the whole platform up.
 )
@@ -165,31 +189,66 @@ esac
 
 [ "${#steps[@]}" -gt 0 ] || { fail "no steps selected"; exit 2; }
 
-# --- the one prerequisite, before step 1 -------------------------------------
-# Checked here, not discovered at step 7. Same reasoning as 00-preflight.sh:
-# a precondition check must only require what the run actually needs, and it
-# must say so before the expensive part starts.
+# --- the one prerequisite, COLLECTED before step 1 ---------------------------
+# Resolved here, not discovered at step 7. Same reasoning as 00-preflight.sh: a
+# precondition must require only what the run actually needs, and it must
+# collect it before the expensive part starts.
 needs_key=0
 for s in "${steps[@]}"; do
   if [ "$s" = "50-gitops" ]; then needs_key=1; break; fi
 done
 
-if [ "$needs_key" -eq 1 ] && [ -z "${OPENROUTER_API_KEY:-}" ]; then
-  fail "OPENROUTER_API_KEY is not set, and this run includes 50-gitops"
-  note "50-gitops.sh builds the askvault-llm secret from that variable"
-  note "export OPENROUTER_API_KEY=... and re-run, or --only to skip it"
-  exit 1
-fi
-
-# --- run ---------------------------------------------------------------------
+# The banner comes FIRST, so the operator knows what is about to start, and how
+# long it might take, BEFORE being asked for a secret. A prompt with nothing in
+# front of it reads as a demand; the identical prompt sitting under "full
+# rebuild, 9 steps" reads as the first step of a procedure.
 printf '== rebuild ==\n'
 case "$mode" in
   full) note "full rebuild, ${#steps[@]} steps" ;;
   from) note "from $want onward, ${#steps[@]} steps" ;;
-  only) note "only ${#steps[*]}, ${#steps[@]} steps" ;;
+  only) note "only ${steps[*]}, ${#steps[@]} steps" ;;
 esac
+
 if [ "$needs_key" -eq 1 ]; then
-  ok "OPENROUTER_API_KEY present (len ${#OPENROUTER_API_KEY})"
+  if [ -n "${OPENROUTER_API_KEY:-}" ]; then
+    ok "OPENROUTER_API_KEY present (len ${#OPENROUTER_API_KEY})"
+  elif [ -t 0 ]; then
+    note "50-gitops.sh builds the askvault-llm secret and needs an OpenRouter key"
+    # -r raw, -s silent: no echo, no line editing, nothing in history. The
+    # `|| true` is load-bearing under `set -e`: a bare `read` returns 1 at EOF
+    # (Ctrl-D), which would kill this script with no message at all -- and this
+    # project has prior findings that are exactly "the check died without saying
+    # why". The empty test below is what reports.
+    printf '  ..   key (input hidden -- not echoed, not in history, not on disk): '
+    read -rs OPENROUTER_API_KEY || true
+    printf '\n'
+    # An empty key is REFUSED, not passed on. It is not a no-op: a Secret holding
+    # an empty value satisfies a required secretKeyRef, so the pod starts, reports
+    # provider=openrouter, and answers every question with an empty completion.
+    # Nothing about that looks broken from the outside, which is exactly why the
+    # refusal belongs here rather than downstream.
+    if [ -z "${OPENROUTER_API_KEY:-}" ]; then
+      fail "an empty key was entered (or input ended at EOF).
+      An empty key is not a placeholder. The manifests reference askvault-llm as
+      a REQUIRED secretKeyRef with no 'optional: true' -- deliberately, so that a
+      missing key is a loud CreateContainerConfigError instead of a healthy pod
+      that quietly 502s at question time. An empty value defeats that: it passes
+      the identical check and then answers nothing."
+      exit 1
+    fi
+    # MUST be exported. 50-gitops.sh is a child `bash`, so an unexported shell
+    # variable is invisible to it and it prompts a SECOND time for the same
+    # secret -- turning one prompt into two, and making it look like the first was
+    # lost. This is the whole reason the value is collected up here at all.
+    export OPENROUTER_API_KEY
+    ok "OPENROUTER_API_KEY read from stdin (len ${#OPENROUTER_API_KEY})"
+  else
+    fail "OPENROUTER_API_KEY is not set, stdin is not a terminal, and this run includes 50-gitops"
+    note "50-gitops.sh builds the askvault-llm secret from that variable"
+    note "non-interactive: export OPENROUTER_API_KEY=... then re-run, or --only to skip it"
+    note "interactive:   re-run without redirecting stdin -- it will ask for the key"
+    exit 1
+  fi
 else
   note "OPENROUTER_API_KEY not needed by this selection"
 fi
