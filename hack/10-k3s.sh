@@ -17,6 +17,8 @@
 #                       bit a later step, because `helm` reads the kubeconfig
 #                       and fails with a confusing permission error when the
 #                       file is root-only and helm is not run with sudo.
+#                       A per-user 600 copy at ~/.kube/config is installed below
+#                       for the interactive path; see finding 23 there.
 #
 # IDEMPOTENT: re-running on a healthy install is a no-op apart from the
 # restart-if-drifted check at the end.
@@ -65,19 +67,37 @@ else
   rm -f "$tmp"
 fi
 
-# --- the flags live in the systemd unit, which is where the installer puts them
-unit="/etc/systemd/system/k3s.service"
-[ -f "$unit" ] || fail "k3s systemd unit not found at $unit"
+# --- the flags live in a systemd DROP-IN, not in the stock unit ---------------
+# BUG FOUND 2026-09-28, finding 25: this read /etc/systemd/system/k3s.service and
+# grepped THAT for the drill's flags. The flags are never in that file -- the
+# installer puts them in /etc/systemd/system/k3s.service.d/10-drill.conf -- so
+# the grep could not succeed, drift was reported on every single run, and this
+# script rewrote the drop-in and RESTARTED K3S every time it ran, including on a
+# perfectly healthy install. Measured, not assumed: the stock unit holds 0
+# occurrences of either flag while `systemctl show k3s -p ExecStart` holds both,
+# so the verdict was a fixed function of which file was read rather than a fact
+# about the running system. It also made the "IDEMPOTENT" promise in this
+# script's own header false, which is the worst kind of drift: a check that
+# cannot be trusted is worse than no check.
+#
+# The check now reads the RESOLVED command line, which is what systemd actually
+# runs once drop-ins are applied. That is also what the two assertions at the end
+# of this script already read, so drift detection and post-write verification now
+# agree with each other instead of contradicting.
+resolved_unit="$(sudo systemctl show k3s -p ExecStart 2>/dev/null || true)"
+[ -n "$resolved_unit" ] \
+  || fail "systemd reported no ExecStart for k3s, so its flags cannot be verified"
 
 drift=0
-grep -q -- "--disable" "$unit" && grep -q "traefik" "$unit" || {
-  note "unit is missing --disable traefik"
-  drift=1
-}
-grep -q -- "write-kubeconfig-mode" "$unit" || {
-  note "unit is missing --write-kubeconfig-mode 600"
-  drift=1
-}
+case "$resolved_unit" in
+  *--disable*traefik*) ;;
+  *) note "the resolved k3s command is missing --disable traefik"; drift=1 ;;
+esac
+case "$resolved_unit" in
+  *--write-kubeconfig-mode*) ;;
+  *) note "the resolved k3s command is missing --write-kubeconfig-mode 600"; drift=1 ;;
+esac
+[ "$drift" -eq 0 ] && note "the resolved k3s command already carries both flags"
 
 if [ "$drift" -eq 1 ]; then
   note "reconfiguring the k3s unit"
@@ -168,6 +188,53 @@ ok "no svclb pods"
 mode="$(stat -c '%a' "$KUBECONFIG_PATH")"
 [ "$mode" = "600" ] || fail "kubeconfig is mode $mode, expected 600"
 ok "kubeconfig mode 600"
+
+# The INTERACTIVE path is a different claim from the two above, and it was broken
+# in a way that made a healthy cluster look unreachable (finding 23).
+#
+# ~/.bashrc exports KUBECONFIG="$HOME/.kube/config" -- twice, on lines 90-91 --
+# and that file is NOT the one k3s writes. It is a copy, so it survives a
+# rebuild still carrying the PREVIOUS cluster's CA. Every interactive `kubectl`
+# then fails with
+#     tls: failed to verify certificate: x509: certificate signed by unknown authority
+# on a cluster that is entirely healthy. It survived two full rebuilds because
+# every drill script exports KUBECONFIG itself, so every step passed green; and
+# because a non-interactive shell never sources .bashrc, so no script could see
+# it either. Only a human in a terminal ever hit it.
+#
+# Refreshing the copy here closes it permanently: it is rewritten from the live
+# kubeconfig on every rebuild, so it cannot drift again.
+#
+# 600 is KEPT, not relaxed to 644. Making /etc/rancher/k3s/k3s.yaml world-readable
+# would fix this as well and would silently revert finding 6, which chose 600
+# precisely because the 644 default exposes a cluster-admin credential to every
+# local account. A per-user copy is the option that satisfies both findings, and
+# it leaves the path in .bashrc correct.
+sudo install -d -m 700 -o "$(id -un)" -g "$(id -gn)" "$HOME/.kube"
+sudo install -m 600 -o "$(id -un)" -g "$(id -gn)" "$KUBECONFIG_PATH" "$HOME/.kube/config"
+[ -r "$HOME/.kube/config" ] \
+  || fail "the per-user kubeconfig at $HOME/.kube/config is not readable by $(id -un)"
+ok "interactive kubeconfig refreshed at \$HOME/.kube/config (mode 600)"
+
+# Assert the claim the way a human experiences it: a plain kubectl, no sudo, no
+# k3s wrapper, using the KUBECONFIG that .bashrc will set. If this is the only
+# check that would have caught finding 23, then it has to be a real one, and it
+# has to fail loudly rather than note.
+if KUBECONFIG="$HOME/.kube/config" kubectl get nodes >/dev/null 2>&1; then
+  ok "plain kubectl authenticates against ~/.kube/config -- what .bashrc hands you"
+else
+  live_ca="$(sudo awk '/certificate-authority-data:/{print $2; exit}' "$KUBECONFIG_PATH" \
+    | base64 -d 2>/dev/null | openssl x509 -noout -fingerprint -sha256 2>/dev/null | sed 's/.*=//')"
+  user_ca="$(awk '/certificate-authority-data:/{print $2; exit}' "$HOME/.kube/config" \
+    | base64 -d 2>/dev/null | openssl x509 -noout -fingerprint -sha256 2>/dev/null | sed 's/.*=//')"
+  fail "plain kubectl cannot use ~/.kube/config, so every interactive kubectl will fail.
+    the KUBECONFIG exports in ~/.bashrc (a duplicate is harmless, a stale path is not):
+$(grep -n 'KUBECONFIG' "$HOME/.bashrc" 2>/dev/null | sed 's/^/      /' || echo '      (none found)')
+    live cluster CA: ${live_ca:-<unreadable>}
+    ~/.kube/config CA: ${user_ca:-<unreadable>}
+    When those two fingerprints differ, that IS the x509 error: the copy is
+    holding a previous cluster's CA and needs rewriting from $KUBECONFIG_PATH."
+fi
 
 sudo -E k3s kubectl get nodes -o custom-columns='NAME:.metadata.name,VERSION:.status.nodeInfo.kubeletVersion,READY:.status.conditions[?(@.type=="Ready")].status'
 
