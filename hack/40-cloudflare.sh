@@ -198,8 +198,48 @@ ok "catch-all http_status:404 present"
 # So this step verifies what it is responsible for (the route), and reports the
 # end-to-end result without treating the normal mid-rebuild state as an error.
 note "asserting the chain: cloudflared -> Caddy/Traefik"
-code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 "https://${CF_HOSTNAME}/" || true)"
-note "https://${CF_HOSTNAME}/ -> HTTP $code"
+
+# FINDING 22 (2026-09-28). This probe used to run exactly once, immediately
+# after `systemctl restart cloudflared` and a fixed `sleep 5`. That measures the
+# tunnel's reconnect window, not its configuration.
+#
+# A restarted cloudflared is not yet serving: systemd reports the unit active
+# while the connector's QUIC connections to Cloudflare's edge are still being
+# re-established, and a request that lands on a connector with no live
+# connection comes back 502/503/504. The evidence that this was the tunnel and
+# not the cluster: on the run that returned 503, 30-traefik.sh had proven
+# Traefik answered on its NodePort with HTTP 404 seconds earlier, and
+# 99-acceptance.sh later found the Ingress present and the Service correctly
+# registered. The backend was demonstrably fine.
+#
+# An intermittent failure is the worst failure mode for a gate. A rebuild that
+# is correct gets rejected for being early, and the operator's learned response
+# is to re-run until it goes green -- which is exactly how a gate stops being
+# evidence.
+#
+# So: retry the transient codes with a bounded backoff, print EVERY
+# observation so a slow tunnel is visible rather than hidden, and judge only
+# once the budget is spent. A sustained 503 remains fatal. The retry separates
+# "not ready yet" from "not working"; it excuses neither.
+transient_budget=6
+transient_delay=5
+attempt=1
+code=""
+while : ; do
+  code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 "https://${CF_HOSTNAME}/" || true)"
+  case "$code" in
+    502|503|504)
+      if [ "$attempt" -le "$transient_budget" ]; then
+        note "HTTP $code -- cloudflared may still be reconnecting (attempt $attempt/$((transient_budget + 1))), retrying in ${transient_delay}s"
+        sleep "$transient_delay"
+        attempt=$((attempt + 1))
+        continue
+      fi
+      ;;
+  esac
+  break
+done
+note "https://${CF_HOSTNAME}/ -> HTTP $code (after $attempt attempt(s))"
 
 case "$code" in
   200)
@@ -212,9 +252,12 @@ case "$code" in
     ok "route configured; end-to-end verification happens at 99-acceptance.sh"
     ;;
   502|503|504)
-    fail "gateway error $code — cloudflared is up but nothing answered behind it.
-Check, in order: Traefik listening on :${NODEPORT_HTTP}; an Ingress for this
-hostname (50-gitops.sh). Run 30-traefik.sh then 50-gitops.sh." ;;
+    fail "gateway error $code, sustained across $attempt attempts over ~$((attempt * transient_delay))s.
+The tunnel's reconnect window is now ruled out, so this is the backend rather
+than cloudflared -- the previous version reported the opposite, which sent the
+reader to the wrong host. Check, in order: Traefik listening on
+:${NODEPORT_HTTP} (30-traefik.sh); an Ingress for this hostname
+(50-gitops.sh, which has not run yet at this point in the rebuild)." ;;
   000)
     fail "no response at all — check DNS for ${CF_HOSTNAME} and 'systemctl status cloudflared'" ;;
   *)
