@@ -153,6 +153,47 @@ sudo -E k3s kubectl apply -f "$LOCAL_GITOPS/argo/appproject.yaml" \
                           -f "$LOCAL_GITOPS/argo/applications.yaml"
 ok "AppProject and Applications applied from $LOCAL_GITOPS/argo/"
 
+# --- PREREQUISITE: the namespaces, before ANY secret -------------------------
+# Both secret sections below write into these two namespaces. Argo creates them
+# during its first sync, which is ASYNCHRONOUS: on a cold rebuild they do not
+# exist for a second or two after the Applications are applied. Whichever
+# secret block runs first loses that race.
+#
+# FINDING 21a (2026-09-28, first rebuild from a 0% teardown). It was not a
+# race, it was an ordering bug in this file. The ghcr-pull block pre-created
+# the namespace, carrying a comment that said exactly why. The askvault-llm
+# block directly above it did not. Result: `kubectl -n askvault-prod create
+# secret askvault-llm` returned 'namespaces "askvault-prod" not found', the
+# error was discarded, the script printed GITOPS OK, and both app pods sat in
+# CreateContainerConfigError for the rest of the run.
+#
+# Timestamps from that run, which is what makes this unambiguous rather than
+# plausible: Argo created namespace askvault-prod at 11:25:32Z; this script's
+# later block created ghcr-pull in it at 11:25:32Z; askvault-llm was never
+# created in either namespace, before or after.
+#
+# Ten lines apart, same logic, opposite outcomes. That asymmetry IS the defect.
+#
+# So the namespace is created ONCE, here, ahead of both consumers, and
+# ASSERTED rather than `|| true`. If it cannot be created then neither secret
+# can be, which is precisely the state this script must refuse to pass.
+APP_NS="askvault-prod askvault-dev"
+for ns in $APP_NS; do
+  if sudo -E k3s kubectl get namespace "$ns" >/dev/null 2>&1; then
+    note "namespace $ns already exists"
+  elif sudo -E k3s kubectl create namespace "$ns" >/dev/null 2>&1; then
+    ok "namespace $ns created up front (Argo had not synced it yet)"
+  else
+    fail "could not create namespace $ns.
+Both secret sections below write into it, so neither can succeed. Argo also
+manages it (syncOptions CreateNamespace=true), so this should not normally
+fail -- if it does, the cluster is not in the state the rest of this script
+assumes and continuing would manufacture a green run over a broken one."
+  fi
+done
+
+# --- 6. the LLM credential the manifests REFERENCE ------------------------
+
   # --- 6. the LLM credential the manifests REFERENCE ------------------------
   # Same shape as the pull secret above, missed for the same reason: created by
   # hand once, procedure never written down. On the first rebuild the app
@@ -172,9 +213,8 @@ ok "AppProject and Applications applied from $LOCAL_GITOPS/argo/"
   #   $OPENROUTER_API_KEY set          -> use it, prompt nothing
   #   unset, stdin IS a tty            -> prompt, silently, no echo
   #   unset, stdin is NOT a tty        -> refuse, and say exactly what to do
-  llm_ns_list="askvault-prod askvault-dev"
   need_llm=0
-  for ns in $llm_ns_list; do
+  for ns in $APP_NS; do
     if ! sudo -E k3s kubectl -n "$ns" get secret askvault-llm >/dev/null 2>&1; then
       need_llm=1
     fi
@@ -215,13 +255,41 @@ never passes through a shell at all. This host has neither."
 Refusing to create a Secret that would fail at first use."
     fi
 
-    for ns in $llm_ns_list; do
-      sudo -E k3s kubectl -n "$ns" create secret generic askvault-llm \
-        --from-literal=api-key="$key" \
-        --dry-run=client -o yaml \
-        | sudo -E k3s kubectl apply -f - >/dev/null 2>&1 \
-        && ok "askvault-llm created in $ns" \
-        || note "could not create askvault-llm in $ns"
+    for ns in $APP_NS; do
+      # The apply's stderr is deliberately NOT suppressed. The previous version
+      # piped it to /dev/null and then reported the failure as a note, which
+      # threw away the only thing that said WHY: the API server's own message.
+      # A check that cannot explain itself is a check nobody can act on.
+      if sudo -E k3s kubectl -n "$ns" create secret generic askvault-llm \
+           --from-literal=api-key="$key" \
+           --dry-run=client -o yaml \
+           | sudo -E k3s kubectl apply -f -; then
+        ok "askvault-llm created in $ns"
+      else
+        # FINDING 21b: this was `|| note`, and a note stops nothing. The script
+        # went on to print GITOPS OK over a rebuild whose app could not start.
+        # The credential-missing paths above were already `fail`; this one path
+        # was missed, and the commit that claimed to close it did not.
+        #
+        # It matters out of proportion to its size, because the Deployment
+        # references this secret as a REQUIRED secretKeyRef -- no
+        # `optional: true`, which was removed deliberately so a missing key is
+        # a loud CreateContainerConfigError rather than a healthy pod that
+        # quietly 502s at question time. So one missing Secret takes down every
+        # downstream check simultaneously: readiness, healthz, the public
+        # edge, the answer itself, the Prometheus target. That is how one line
+        # here surfaced as 13 acceptance failures that all read like
+        # independent infrastructure problems.
+        #
+        # Per-namespace on purpose, matching the pull secret below: one
+        # namespace succeeding and one failing is a real partial state, and
+        # reporting it as a pass is how a half-built rebuild gets shipped.
+        fail "could not create askvault-llm in $ns.
+The kubelet message this prevents is:
+  Error: secret \"askvault-llm\" not found   (CreateContainerConfigError)
+The API server said why above. If nothing printed above, the namespace is
+missing or the API server is unreachable -- re-check section 3."
+      fi
     done
     unset key
   fi
@@ -247,12 +315,7 @@ Refusing to create a Secret that would fail at first use."
     user="$(printf '%s' "$auth" | base64 -d | cut -d: -f1)"
     token="$(printf '%s' "$auth" | base64 -d | cut -d: -f2-)"
 
-    for ns in askvault-prod askvault-dev; do
-      # Argo creates the namespace on first sync; create it here too so the
-      # secret lands BEFORE the first pull attempt rather than after one backoff.
-      sudo -E k3s kubectl create namespace "$ns" --dry-run=client -o yaml \
-        | sudo -E k3s kubectl apply -f - >/dev/null 2>&1 || true
-
+    for ns in $APP_NS; do
       if sudo -E k3s kubectl -n "$ns" create secret docker-registry ghcr-pull \
            --docker-server=ghcr.io \
            --docker-username="$user" \
