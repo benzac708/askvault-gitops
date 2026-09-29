@@ -32,7 +32,7 @@ than trusting that a command succeeded.
 | `00-preflight.sh` | Verify host facts, ports, tooling. Changes nothing. | bare host |
 | `10-k3s.sh` | k3s, Traefik disabled, kubeconfig 0600 | 00 |
 | `20-argocd.sh` | Argo CD, server-side apply; argocd CLI | 10 |
-| `30-traefik.sh` | Traefik v3 as NodePort, CRDs off, endpoint published | 10 |
+| `30-traefik.sh` | Traefik v3 as NodePort, CRDs on (IngressRoute + Middleware), endpoint published | 10 |
 | `40-cloudflare.sh` | Tunnel ingress rule → NodePort 30080 | 30 |
 | `45-reset-app.sh` | **Drop the app layer** (2 Applications, 2 namespaces) so 50 builds it from nothing. Skips on a clean host. | 20, 40 |
 | `50-gitops.sh` | Deploy key, repo registration, AppProject + Applications, both secrets | 20, 40, 45 |

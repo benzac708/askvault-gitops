@@ -112,7 +112,7 @@ sudo -E helm repo update traefik >/dev/null
 
 # --- install / upgrade --------------------------------------------------------
 # Every --set below is load-bearing and none is a chart default worth keeping.
-note "installing $RELEASE (NodePort ${NODEPORT_HTTP}/${NODEPORT_HTTPS}, CRDs off, endpoint ${ENDPOINT_IP})"
+note "installing $RELEASE (NodePort ${NODEPORT_HTTP}/${NODEPORT_HTTPS}, CRDs on: IngressRoute + Middleware, endpoint ${ENDPOINT_IP})"
 sudo -E helm upgrade --install "$RELEASE" "$CHART" -n "$NS" --create-namespace \
   --set ingressRoute.dashboard.enabled=false \
   --set ports.web.nodePort="$NODEPORT_HTTP" \
