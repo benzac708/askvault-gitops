@@ -74,8 +74,9 @@ spec:
           # Replaced per environment by the kustomize `images` transformer.
           # Never a floating tag in production -- see overlays/prod.
           image: ghcr.io/benzac708/askvault:main
-          # With an immutable tag in production this is close to moot, but it
-          # avoids a registry round-trip per pod start on a single-node cluster.
+          # Always, because dev runs the moving :main tag and IfNotPresent let
+          # containerd reuse a stale cached digest under the same tag name -- the
+          # dev canary silently served a stale UI for exactly that reason.
           imagePullPolicy: Always
           securityContext:
             allowPrivilegeEscalation: false
