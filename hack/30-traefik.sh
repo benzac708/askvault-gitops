@@ -7,7 +7,7 @@
 #   which grabs host ports 80 and 443 directly. Caddy already owns those ports
 #   on this host - it terminates TLS and reverse-proxies to the NodePort - so a
 #   LoadBalancer Traefik would either fail to bind or steal the traffic. The
-#   chain is Caddy -> 127.0.0.1:30080 -> Traefik, and NodePort is what makes
+#   chain is cloudflared tunnel -> 127.0.0.1:30080 -> Traefik, and NodePort is what makes
 #   that chain legal.
 #
 # WHY kubernetesCRD IS DISABLED:
