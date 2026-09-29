@@ -1,0 +1,35 @@
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata:
+  name: askvault
+  labels:
+    app.kubernetes.io/name: askvault
+    app.kubernetes.io/component: rag-service
+    app.kubernetes.io/part-of: askvault
+spec:
+  # entryPoints.web is Traefik's :8000 (NodePort 80:30080). The cloudflared
+  # tunnel terminates TLS at its own edge and forwards plain HTTP here, so
+  # Traefik terminates nothing publicly.
+  entryPoints:
+    - web
+  # L2: exactly two exact paths. `/` serves the web UI and accepts its form
+  # POST; `/chat` is the JSON endpoint. Nothing else is routed, which is the
+  # security property rather than an omission -- /healthz, /readyz and
+  # /metrics are deliberately unreachable from outside the cluster and are
+  # reached in-cluster by kubelet and Prometheus instead. A Prefix match on
+  # `/` would silently expose all three; these matchers are exact.
+  #
+  # The host is a sentinel, not a hostname. `.invalid` is reserved by RFC 2606
+  # and can never resolve, so a bare `kubectl apply -k base` can never
+  # accidentally claim a real public name. Each overlay sets its own host.
+  routes:
+    - match: Host(`askvault.invalid`) && Path(`/`)
+      kind: Rule
+      services:
+        - name: askvault
+          port: 8000
+    - match: Host(`askvault.invalid`) && Path(`/chat`)
+      kind: Rule
+      services:
+        - name: askvault
+          port: 8000

@@ -14,6 +14,8 @@ namespace: askvault-prod
 resources:
   - ../../base
   - namespace.yaml
+  - middlewares.yaml
+  - ingressroute-public.yaml
 
 # NOTE: sealed-secrets.yaml is intentionally NOT a kustomize resource. The
 # overlay's `namespace:` transformer would rewrite every resource into one
@@ -31,7 +33,6 @@ images:
 # line in prod: base carries the sentinel `askvault.invalid` so that applying base
 # on its own can never claim a real public name.
 patches:
-  - path: patch-ingress.yaml
   - path: patch-config.yaml
 
 # Everything else about prod is the base posture exactly: the D32 rate ceilings,

@@ -1,0 +1,36 @@
+# The only prod-specific routing change: the public hostname, enforced with
+# the prod middleware chain. The base routes (askvault.invalid, no middleware)
+# also exist via overlays' base inclusion; the tunnel only ever reaches this
+# host, so the sentinel routes are inert.
+#
+# /chat gets headers + the rate cap but NOT retry: retrying a paid provider
+# POST is not an idempotent act.
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata:
+  name: askvault-public
+  labels:
+    app.kubernetes.io/name: askvault
+    app.kubernetes.io/component: rag-service
+    app.kubernetes.io/part-of: askvault
+spec:
+  entryPoints:
+    - web
+  routes:
+    - match: Host(`askvault.zachara.dev`) && Path(`/`)
+      kind: Rule
+      middlewares:
+        - name: askvault-headers
+        - name: askvault-ratelimit
+        - name: askvault-retry
+      services:
+        - name: askvault
+          port: 8000
+    - match: Host(`askvault.zachara.dev`) && Path(`/chat`)
+      kind: Rule
+      middlewares:
+        - name: askvault-headers
+        - name: askvault-ratelimit
+      services:
+        - name: askvault
+          port: 8000
