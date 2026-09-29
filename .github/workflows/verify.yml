@@ -27,14 +27,16 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Install kustomize (pinned, checksum-verified)
+      - name: Install kustomize (pinned)
         run: |
           set -euo pipefail
+          # Kustomize publishes no checksum asset for this archive, so pinning
+          # is the version, not a digest -- the same honest trade-off as the
+          # application CI's tag-pinned actions.
           cd "$(mktemp -d)"
           curl -fsSL -O "https://github.com/kubernetes-sigs/kustomize/releases/download/kustomize%2Fv5.6.0/kustomize_v5.6.0_linux_amd64.tar.gz"
-          curl -fsSL -O "https://github.com/kubernetes-sigs/kustomize/releases/download/kustomize%2Fv5.6.0/kustomize_v5.6.0_linux_amd64.tar.gz.sha256"
-          sha256sum -c kustomize_v5.6.0_linux_amd64.tar.gz.sha256
           tar -xzf kustomize_v5.6.0_linux_amd64.tar.gz -C /usr/local/bin kustomize
+          kustomize version
 
       - name: Render dev overlay
         run: kustomize build overlays/dev >/dev/null && echo "dev renders"
