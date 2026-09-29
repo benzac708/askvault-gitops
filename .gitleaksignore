@@ -3,5 +3,5 @@
 # (sk-or-v1-0123456789abcdef). History keeps them; the gate stays on for
 # everything real. Mirrors askvault/.gitleaksignore. Fingerprints:
 # commit:file:rule:line.
-7707d6062df866d62ee7ef83997422afb26513f2:hack/rebuild.test.sh:generic-api-key:48
-7707d6062df866d62ee7ef83997422afb26513f2:hack/rebuild.test.sh:generic-api-key:134
+7eec6b0a41b145c4d5022074ec1e35b4ed9a7daa:hack/rebuild.test.sh:generic-api-key:48
+7eec6b0a41b145c4d5022074ec1e35b4ed9a7daa:hack/rebuild.test.sh:generic-api-key:134
