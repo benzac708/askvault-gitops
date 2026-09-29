@@ -15,6 +15,14 @@ resources:
   - ../../base
   - namespace.yaml
 
+# NOTE: sealed-secrets.yaml is intentionally NOT a kustomize resource. The
+# overlay's `namespace:` transformer would rewrite every resource into one
+# namespace, but the sealed file carries both prod and dev copies - the
+# namespace transformer would collide them. It is applied directly by
+# hack/50-gitops.sh (which also waits for decryption), keeping the secrets
+# non-Argo-owned exactly as before, while the ciphertext is now reviewed in
+# Git.
+
 images:
   - name: ghcr.io/benzac708/askvault
     newTag: sha-42e34292d4bf

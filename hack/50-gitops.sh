@@ -192,161 +192,61 @@ assumes and continuing would manufacture a green run over a broken one."
   fi
 done
 
-# --- 6. the LLM credential the manifests REFERENCE ------------------------
+# --- 6. credentials as Sealed Secrets: apply, wait, fail loud ----------------
+#   askvault-llm and ghcr-pull now travel encrypted in
+#   overlays/prod/sealed-secrets.yaml (sealed-secrets controller in
+#   kube-system decrypts them into a Secret in the target namespace). This
+#   section existed because, pre-seal, both secrets were created by hand once
+#   and the procedure was never written down - that hidden state is exactly
+#   what a rebuild harness exists to expose. Now they are reviewable in Git.
+#
+#   The fail-loud guarantees survive unchanged: the Deployment references
+#   askvault-llm as a REQUIRED secretKeyRef (no 'optional: true'), so a
+#   missing secret is a CreateContainerConfigError, not a healthy pod that
+#   quietly 502s; and the kubelet resolves the image credential ONLY from
+#   imagePullSecrets (C1), so a missing ghcr-pull is ImagePullBackOff. Both
+#   are ASSERTED here after the controller has had a beat to decrypt, rather
+#   than reported as ok over thin air (FINDING 21b).
+#
+#   The file is applied BEFORE Argo syncs (the AppProject registers the repo
+#   at the end of this script), so the namespace pre-creation above stays
+#   load-bearing: the SealedSecrets land in a namespace that already exists.
+SEALED_FILE="${SEALED_CREDS_FILE:-$(cd "$(dirname "$0")/.." && pwd)/overlays/prod/sealed-secrets.yaml}"
+if [ ! -f "$SEALED_FILE" ] || ! grep -q "kind: SealedSecret" "$SEALED_FILE"; then
+  fail "sealed credential manifests missing at $SEALED_FILE.
+The rebuild cannot produce askvault-llm or ghcr-pull without them, and both
+are non-optional references. Seal with kubeseal and commit before running."
+fi
+for ns in $APP_NS; do
+  if sudo -E k3s kubectl apply -f "$SEALED_FILE" >/dev/null 2>&1; then
+    ok "sealed-secrets applied for $ns"
+  else
+    fail "could not apply sealed secrets for $ns.
+The API server said why above; if nothing printed, the controller or the
+namespace is missing - re-check section 3."
+  fi
+done
 
-  # --- 6. the LLM credential the manifests REFERENCE ------------------------
-  # Same shape as the pull secret above, missed for the same reason: created by
-  # hand once, procedure never written down. On the first rebuild the app
-  # reported provider=openrouter with key_len=0 -- it believed it was configured
-  # for a real model, had no key, and looked completely healthy until someone
-  # asked a question and got a 502.
-  #
-  # WHY THIS IS NOT "paste the key into a file": a file on the host puts the
-  # value in a swap file, in editor history, and on disk. D13 exists so the
-  # credential is injected out of band and never persisted. Real production
-  # would use Sealed Secrets (encrypted in Git, reviewable in a PR) or the
-  # External Secrets Operator (fetched from a KMS at runtime). This is the
-  # portable primitive those are built on.
-  #
-  # INTERACTIVE vs UNATTENDED: a prompt would hang forever in CI, so behaviour
-  # depends on whether stdin is a terminal.
-  #   $OPENROUTER_API_KEY set          -> use it, prompt nothing
-  #   unset, stdin IS a tty            -> prompt, silently, no echo
-  #   unset, stdin is NOT a tty        -> refuse, and say exactly what to do
-  need_llm=0
-  for ns in $APP_NS; do
-    if ! sudo -E k3s kubectl -n "$ns" get secret askvault-llm >/dev/null 2>&1; then
-      need_llm=1
+# The controller decrypts async; wait (bounded) rather than assume.
+for ns in $APP_NS; do
+  for name in askvault-llm ghcr-pull; do
+    waited=0
+    while ! sudo -E k3s kubectl -n "$ns" get secret "$name" >/dev/null 2>&1; do
+      [ "$waited" -ge 30 ] && break
+      sleep 2; waited=$((waited+1))
+    done
+    if sudo -E k3s kubectl -n "$ns" get secret "$name" >/dev/null 2>&1; then
+      ok "secret $name present in $ns (sealed secret decrypted)"
+    else
+      fail "secret $name missing in $ns after 60s.
+The SealedSecret was applied; the controller did not decrypt it. Check the
+sealed-secrets-controller pod in kube-system and its logs. A missing secret
+here is a CreateContainerConfigError (askvault-llm) or ImagePullBackOff
+(ghcr-pull), so this is not a recoverable state."
     fi
   done
+done
 
-  if [ "$need_llm" -eq 0 ]; then
-    ok "askvault-llm already present in both namespaces"
-  else
-    key="${OPENROUTER_API_KEY:-}"
-    if [ -z "$key" ] && [ -t 0 ]; then
-      # -r raw, -s silent, -p prompt: no echo, no history, no file.
-      printf '  ..   OpenRouter key needed (input hidden): '
-      read -rs key
-      printf '\n'
-    fi
-
-    if [ -z "$key" ]; then
-      fail "askvault-llm is missing and no key was supplied.
-Without it the app starts, reports provider=openrouter, and quietly answers with
-an empty key until someone asks a question.
-
-Non-interactive (CI, or ssh without -t):
-    export OPENROUTER_API_KEY=...
-    then re-run this script
-
-Interactive (pasted at a hidden prompt; never echoed, never in shell history,
-never written to any file on this host):
-    read -rsp 'key: ' K && echo
-    OPENROUTER_API_KEY=\$K $0
-    unset K
-
-Production would use Sealed Secrets or the External Secrets Operator so the value
-never passes through a shell at all. This host has neither."
-    fi
-
-    if [ "${#key}" -lt 20 ]; then
-      fail "the supplied key is only ${#key} characters -- not a real key.
-Refusing to create a Secret that would fail at first use."
-    fi
-
-    for ns in $APP_NS; do
-      # The apply's stderr is deliberately NOT suppressed. The previous version
-      # piped it to /dev/null and then reported the failure as a note, which
-      # threw away the only thing that said WHY: the API server's own message.
-      # A check that cannot explain itself is a check nobody can act on.
-      if sudo -E k3s kubectl -n "$ns" create secret generic askvault-llm \
-           --from-literal=api-key="$key" \
-           --dry-run=client -o yaml \
-           | sudo -E k3s kubectl apply -f -; then
-        ok "askvault-llm created in $ns"
-      else
-        # FINDING 21b: this was `|| note`, and a note stops nothing. The script
-        # went on to print GITOPS OK over a rebuild whose app could not start.
-        # The credential-missing paths above were already `fail`; this one path
-        # was missed, and the commit that claimed to close it did not.
-        #
-        # It matters out of proportion to its size, because the Deployment
-        # references this secret as a REQUIRED secretKeyRef -- no
-        # `optional: true`, which was removed deliberately so a missing key is
-        # a loud CreateContainerConfigError rather than a healthy pod that
-        # quietly 502s at question time. So one missing Secret takes down every
-        # downstream check simultaneously: readiness, healthz, the public
-        # edge, the answer itself, the Prometheus target. That is how one line
-        # here surfaced as 13 acceptance failures that all read like
-        # independent infrastructure problems.
-        #
-        # Per-namespace on purpose, matching the pull secret below: one
-        # namespace succeeding and one failing is a real partial state, and
-        # reporting it as a pass is how a half-built rebuild gets shipped.
-        fail "could not create askvault-llm in $ns.
-The kubelet message this prevents is:
-  Error: secret \"askvault-llm\" not found   (CreateContainerConfigError)
-The API server said why above. If nothing printed above, the namespace is
-missing or the API server is unreachable -- re-check section 3."
-      fi
-    done
-    unset key
-  fi
-  # --- 4. the pull secret the manifests REFERENCE ----------------------------
-  # base/deployment.yaml carries `imagePullSecrets: [ghcr-pull]` with no value,
-  # which is correct (L1: the reference is in Git, the credential is not). But
-  # something must CREATE it, and on the first rebuild nothing did -- the secret
-  # had been made by hand in an earlier session and the procedure was never
-  # written down. Result: everything synced, Ingress and ServiceMonitor were
-  # created, and the pod sat in ImagePullBackOff with "Unable to retrieve some
-  # image pull secrets (ghcr-pull)".
-  #
-  # That is a MISSING REBUILD STEP rather than a bug, and it is exactly the
-  # hidden state this exercise exists to expose: a working system whose
-  # reproducibility depended on someone remembering.
-  #
-  # WHY a secret at all, when the package is public: the kubelet's anonymous
-  # ghcr token request returns 403 on this node, and the kubelet resolves
-  # credentials ONLY from imagePullSecrets (C1).
-  if [ -f "$HOME/.docker/config.json" ] \
-     && grep -q '"ghcr.io"' "$HOME/.docker/config.json" 2>/dev/null; then
-    auth="$(jq -r '.auths["ghcr.io"].auth' "$HOME/.docker/config.json")"
-    user="$(printf '%s' "$auth" | base64 -d | cut -d: -f1)"
-    token="$(printf '%s' "$auth" | base64 -d | cut -d: -f2-)"
-
-    for ns in $APP_NS; do
-      if sudo -E k3s kubectl -n "$ns" create secret docker-registry ghcr-pull \
-           --docker-server=ghcr.io \
-           --docker-username="$user" \
-           --docker-password="$token" \
-           --dry-run=client -o yaml \
-           | sudo -E k3s kubectl apply -f - >/dev/null 2>&1; then
-        ok "ghcr-pull present in $ns"
-      else
-        # Hard failure, not a note. A namespace without the pull secret cannot
-        # start its app, so continuing would print "GITOPS OK" over a rebuild
-        # that is visibly broken. Per-namespace on purpose: one namespace
-        # succeeding and one failing is a real partial state, not a pass.
-        fail "could not create ghcr-pull in $ns.
-The app image is ghcr.io/benzac708/askvault and the kubelet resolves
-credentials ONLY from imagePullSecrets (C1) -- containerd registries.yaml is
-not consulted. Without this secret the pod sits in ImagePullBackOff."
-      fi
-    done
-  else
-    # Hard failure, matching 20-argocd.sh. The previous version only noted this
-    # and carried on to print "GITOPS OK" -- a gate that announces the failure
-    # it just detected, then reports success anyway. 20-argocd.sh already stops
-    # earlier for the same missing credential, but this script can be run on its
-    # own, and on its own it must not under-report.
-    fail "no ghcr.io entry in $HOME/.docker/config.json -- cannot create the pull secret.
-The app pod would sit in ImagePullBackOff, so this is not a recoverable state.
-Log in first:
-  echo \$TOKEN | docker login ghcr.io -u <user> --password-stdin
-Same credential source 20-argocd.sh uses; this is the one undeclared
-prerequisite of the whole rebuild, so it is checked at both ends."
-  fi
 # --- 4. the string-match assertion, which is the one that actually bites -----
 proj="$(sudo -E k3s kubectl -n "$ARGOCD_NS" get appproject askvault -o jsonpath='{.spec.sourceRepos[0]}')"
 [ "$proj" = "$GITOPS_URL" ] || fail "AppProject sourceRepos is '$proj', but the repo is registered as '$GITOPS_URL'.

@@ -45,8 +45,8 @@ run() {                    # run <dir> <args...>  (stdin from /dev/null = non-tt
   echo $?
 }
 # `run` is a shell function, so `env VAR=x run` cannot work. Set it exported.
-withkey() { export OPENROUTER_API_KEY=fixture-not-a-real-key; }
-nokey()   { unset OPENROUTER_API_KEY; }
+withkey()  { export SEALED_CREDS_FILE="$SRC/../overlays/prod/sealed-secrets.yaml"; }
+nokey()    { export SEALED_CREDS_FILE="$WORK/missing-sealed.yaml"; }
 
 # --- 1. --yes without --from-zero is rejected, not silently ignored -----------
 D=$WORK/t1; mk "$D"
@@ -80,8 +80,8 @@ withkey; rc=$(run "$D" --from-zero --yes --only 50-gitops,99-acceptance)
 # reason the teardown sits after the credential gate.
 D=$WORK/t5; mk "$D"
 nokey; rc=$(run "$D" --from-zero --yes)
-[ "$rc" = 1 ] && t 0 "5  --from-zero --yes, no key, no tty -> exit 1" || t 1 "5  -> exit $rc (want 1)"
-grep -q "OPENROUTER_API_KEY is not set" "$D/out.txt" && t 0 "5  ...refused on the CREDENTIAL, not the confirmation" || t 1 "5  ...wrong refusal: $(grep -m1 FAIL "$D/out.txt")"
+[ "$rc" = 1 ] && t 0 "5  --from-zero --yes, no sealed file -> exit 1" || t 1 "5  -> exit $rc (want 1)"
+grep -q "sealed-secrets.yaml is missing" "$D/out.txt" && t 0 "5  ...refused on the CREDENTIAL, not the confirmation" || t 1 "5  ...wrong refusal: $(grep -m1 FAIL "$D/out.txt")"
 [ ! -s "$D/order.log" ] && t 0 "5  ...and the cluster was NOT destroyed" || t 1 "5  ...BUT teardown ran: $(cat "$D/order.log")"
 
 # --- 6. full happy path: teardown, then all nine steps, in order --------------

@@ -6,7 +6,7 @@ One command rebuilds the whole platform:
 bash ~/repos/askvault/hack/rebuild.sh
 ```
 
-It asks for the OpenRouter key at a hidden prompt, runs every step in
+It travels no credentials at all now - the secrets are Sealed Secrets in Git, decrypted in-cluster; it instead confirms the sealed manifests exist, then runs every step in
 dependency order, stops at the first failure, and exits non-zero if any step
 failed. `--from <step>`, `--only <a,b>` and `--list` narrow it.
 

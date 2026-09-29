@@ -24,22 +24,14 @@
 #   that passes for the wrong reason - it is worse, because an assertion is
 #   noticed and a gate is trusted.
 #
-# SECOND JOB: COLLECT THE CREDENTIAL, before burning eight minutes.
-#   50-gitops.sh builds the askvault-llm secret from OPENROUTER_API_KEY. Finding
-#   that out at step 7 of 8, after six green steps, is an expensive way to learn
-#   about a missing variable -- so this asks for it up front, which is the entire
-#   point of a preflight. It used to REFUSE here and print an export line for the
-#   operator to run, which made the one command that rebuilds everything into two
-#   commands and put a hand-typed credential on the command line where it lands
-#   in shell history. Asking is strictly better than refusing, and refusing was
-#   only ever a way of not implementing the ask.
-#
-#   Three-way behaviour, identical to 50-gitops.sh's own, because a script that
-#   collects a secret one way in two places is a script that will one day
-#   collect it two ways:
-#     set        -> use it
-#     unset, tty -> prompt, no echo, no history, no file
-#     unset, no tty (CI, ssh without -t) -> refuse, and say exactly what to do
+# SECOND JOB: CHECK THE CREDENTIAL MATERIAL, before burning eight minutes.
+#   AskVault's credentials travel as Sealed Secrets
+#   (overlays/prod/sealed-secrets.yaml): encrypted in Git, decrypted in-cluster
+#   by the sealed-secrets controller, referenced by the manifests as required
+#   secretKeyRefs. A rebuild needs no key prompt and no ~/.docker/config.json -
+#   the preflight's job is to confirm the sealed manifests exist and carry
+#   SealedSecret entries, because discovering they are missing at step 7 of 8,
+#   after six green steps, is the expensive way to learn it.
 #
 # THIRD JOB: make "rebuild" mean rebuild.
 #   45-reset-app.sh drops the app layer so 50-gitops.sh creates it from nothing
@@ -269,9 +261,9 @@ fi
 # Resolved here, not discovered at step 7. Same reasoning as 00-preflight.sh: a
 # precondition must require only what the run actually needs, and it must
 # collect it before the expensive part starts.
-needs_key=0
+needs_sealed=0
 for s in "${steps[@]}"; do
-  if [ "$s" = "50-gitops" ]; then needs_key=1; break; fi
+  if [ "$s" = "50-gitops" ]; then needs_sealed=1; break; fi
 done
 
 # The banner comes FIRST, so the operator knows what is about to start, and how
@@ -289,48 +281,20 @@ if [ "$from_zero" -eq 1 ]; then
   note "the estate is not touched: cloudflared, Caddy and every other service stay"
 fi
 
-if [ "$needs_key" -eq 1 ]; then
-  if [ -n "${OPENROUTER_API_KEY:-}" ]; then
-    ok "OPENROUTER_API_KEY present (len ${#OPENROUTER_API_KEY})"
-  elif [ -t 0 ]; then
-    note "50-gitops.sh builds the askvault-llm secret and needs an OpenRouter key"
-    # -r raw, -s silent: no echo, no line editing, nothing in history. The
-    # `|| true` is load-bearing under `set -e`: a bare `read` returns 1 at EOF
-    # (Ctrl-D), which would kill this script with no message at all -- and this
-    # project has prior findings that are exactly "the check died without saying
-    # why". The empty test below is what reports.
-    printf '  ..   key (input hidden -- not echoed, not in history, not on disk): '
-    read -rs OPENROUTER_API_KEY || true
-    printf '\n'
-    # An empty key is REFUSED, not passed on. It is not a no-op: a Secret holding
-    # an empty value satisfies a required secretKeyRef, so the pod starts, reports
-    # provider=openrouter, and answers every question with an empty completion.
-    # Nothing about that looks broken from the outside, which is exactly why the
-    # refusal belongs here rather than downstream.
-    if [ -z "${OPENROUTER_API_KEY:-}" ]; then
-      fail "an empty key was entered (or input ended at EOF).
-      An empty key is not a placeholder. The manifests reference askvault-llm as
-      a REQUIRED secretKeyRef with no 'optional: true' -- deliberately, so that a
-      missing key is a loud CreateContainerConfigError instead of a healthy pod
-      that quietly 502s at question time. An empty value defeats that: it passes
-      the identical check and then answers nothing."
-      exit 1
-    fi
-    # MUST be exported. 50-gitops.sh is a child `bash`, so an unexported shell
-    # variable is invisible to it and it prompts a SECOND time for the same
-    # secret -- turning one prompt into two, and making it look like the first was
-    # lost. This is the whole reason the value is collected up here at all.
-    export OPENROUTER_API_KEY
-    ok "OPENROUTER_API_KEY read from stdin (len ${#OPENROUTER_API_KEY})"
+if [ "$needs_sealed" -eq 1 ]; then
+  SEALED_CREDS_FILE="${SEALED_CREDS_FILE:-$(cd "$(dirname "$0")/.." && pwd)/overlays/prod/sealed-secrets.yaml}"
+  if [ -f "$SEALED_CREDS_FILE" ] && grep -q "kind: SealedSecret" "$SEALED_CREDS_FILE"; then
+    ok "sealed credential manifests present ($(basename "$SEALED_CREDS_FILE"))"
   else
-    fail "OPENROUTER_API_KEY is not set, stdin is not a terminal, and this run includes 50-gitops"
-    note "50-gitops.sh builds the askvault-llm secret from that variable"
-    note "non-interactive: export OPENROUTER_API_KEY=... then re-run, or --only to skip it"
-    note "interactive:   re-run without redirecting stdin -- it will ask for the key"
+    fail "sealed-secrets.yaml is missing or has no SealedSecret entries.
+AskVault's credentials are sealed in Git and decrypted in-cluster; without
+them the rebuild cannot produce askvault-llm or ghcr-pull. The pod references
+are non-optional by design, so a missing secret is a loud
+CreateContainerConfigError instead of a healthy pod that quietly 502s."
     exit 1
   fi
 else
-  note "OPENROUTER_API_KEY not needed by this selection"
+  note "sealed credentials not needed by this selection"
 fi
 printf '\n'
 
