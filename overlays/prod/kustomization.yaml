@@ -17,7 +17,7 @@ resources:
 
 images:
   - name: ghcr.io/benzac708/askvault
-    newTag: sha-c3e76055d2eb
+    newTag: sha-1ed9af282a4d
 
 # The public hostname, and nothing else. This is the single environment-specific
 # line in prod: base carries the sentinel `askvault.invalid` so that applying base
