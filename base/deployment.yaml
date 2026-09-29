@@ -76,7 +76,7 @@ spec:
           image: ghcr.io/benzac708/askvault:main
           # With an immutable tag in production this is close to moot, but it
           # avoids a registry round-trip per pod start on a single-node cluster.
-          imagePullPolicy: IfNotPresent
+          imagePullPolicy: Always
           securityContext:
             allowPrivilegeEscalation: false
             # The image needs no writable path outside /data: the corpus is
