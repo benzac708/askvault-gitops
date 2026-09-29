@@ -62,10 +62,11 @@ for what that means in practice.
 ## CI
 
 `.github/workflows/verify.yml` renders both overlays with checksum-pinned
-kustomize on push and pull request. It is currently dormant: the account's
-private-repo GitHub Actions minutes are blocked by a failed-payment state, so
-this workflow will not run until that is resolved. The same state is why the
-application's CI is gated locally via `act` (see the `askvault` README).
+kustomize on push and pull request. The repositories are public, so runs use
+free GitHub Actions minutes and the gate is green (it caught and fixed an
+unresolvable kustomize checksum asset on its first run). The application CI is
+described in the `askvault` README; both gates are locally reproducible with
+`act` (nektos/act) when needed.
 
 ## Rebuild
 
