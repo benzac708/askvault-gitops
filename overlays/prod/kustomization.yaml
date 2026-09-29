@@ -28,10 +28,13 @@ patches:
 
 # Everything else about prod is the base posture exactly: the D32 rate ceilings,
 # the read-only root filesystem, the dropped capabilities, the single replica, the
-# measured resource envelope, the two Exact ingress paths. The remaining pending
-# production change is documented in the README: switching LLM_PROVIDER from
-# `mock` to `openrouter` once the key Secret exists. That is a single-line patch
-# to this directory, and it is deliberately not written speculatively.
+# measured resource envelope, the two Exact ingress paths.
+#
+# Prod's one application-configuration difference lives in patch-config.yaml:
+# LLM_PROVIDER=openrouter with a pinned model id (read from the provider's live
+# /api/v1/models, never a floating free tier). The credential itself is injected
+# out of band as a Secret and never appears in this repository; the pod fails to
+# start, loudly, if that Secret is missing (no `optional:` on the keyRef).
 #
 # Note this widens the dev/prod diff beyond the 22 lines recorded for 9h: the
 # hostname is now a second axis of difference. It is deployment topology rather
