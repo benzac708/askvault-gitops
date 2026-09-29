@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# 95-export-sanitise.sh — render section 6 of the drill document for
+# 95-export-sanitise.sh - render section 6 of the drill document for
 # publication, with host-specific values replaced by placeholders.
 #
 # WHY THIS EXISTS AT ALL, since gitleaks already runs:
 #
 #   gitleaks detects SECRETS. It has no opinion about a hostname, an IP, a
 #   namespace on a real cloud account, or a tunnel name. Those are not secrets
-#   and they are still things that should not be published — they describe
+#   and they are still things that should not be published - they describe
 #   infrastructure belonging to a real account. So "gitleaks is clean" is not
 #   the same claim as "the export is safe", and conflating them is the failure
 #   this script prevents.
@@ -50,7 +50,7 @@ readonly NEVER_PUBLISH=(
 # NOTE on `/etc/cloudflared/config.yml`: that path is a GENERIC, documented
 # location and appears in the drill as a legitimate command. Banning the path
 # itself produced a false positive that would have trained the operator to
-# ignore this gate — which is worse than not having it. What actually must not
+# ignore this gate - which is worse than not having it. What actually must not
 # be published is the CONFIG'S CONTENT: the tunnel name and credential-file id,
 # both of which are on the list above. A gate with false positives is a gate
 # people learn to bypass.
@@ -66,7 +66,7 @@ awk '
   insec                {print}
 ' "$SRC" > "$OUT.tmp"
 
-[ -s "$OUT.tmp" ] || { printf 'FAIL: section 6 extracted empty — check the heading text\n' >&2; rm -f "$OUT.tmp"; exit 1; }
+[ -s "$OUT.tmp" ] || { printf 'FAIL: section 6 extracted empty - check the heading text\n' >&2; rm -f "$OUT.tmp"; exit 1; }
 
 lines_in="$(wc -l < "$OUT.tmp")"
 [ "$lines_in" -gt 100 ] || { printf 'FAIL: section 6 is suspiciously small (%s lines)\n' "$lines_in" >&2; exit 1; }

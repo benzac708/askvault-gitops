@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# rebuild.sh — run the whole rebuild, in the one order that works, from a host
+# rebuild.sh - run the whole rebuild, in the one order that works, from a host
 # that has been torn down to 0%.
 #
 # NOT part of the numbered series it runs. It is the thing that runs the series,
-# which is why it has no number prefix — a number here would claim a place in
+# which is why it has no number prefix - a number here would claim a place in
 # the dependency order that it does not occupy.
 #
 # WHY THIS IS A FILE AND NOT A FOR LOOP TYPED AT THE PROMPT
@@ -21,7 +21,7 @@
 #   That is the 20th instance of this project's one recurring bug class: every
 #   failure so far has been in a CHECK or an ORCHESTRATOR, never in the
 #   infrastructure. A gate that fails open is the same defect as an assertion
-#   that passes for the wrong reason — it is worse, because an assertion is
+#   that passes for the wrong reason - it is worse, because an assertion is
 #   noticed and a gate is trusted.
 #
 # SECOND JOB: COLLECT THE CREDENTIAL, before burning eight minutes.
@@ -110,7 +110,7 @@ note() { printf '  ..   %s\n' "$1"; }
 
 usage() {
   cat <<'HELP'
-rebuild.sh — rebuild k3s + Argo CD + Traefik + the app, in dependency order.
+rebuild.sh - rebuild k3s + Argo CD + Traefik + the app, in dependency order.
 
 USAGE
   rebuild.sh                          run every step, stop at the first failure

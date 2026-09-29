@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 20-argocd.sh — install Argo CD, then install the argocd CLI.
+# 20-argocd.sh - install Argo CD, then install the argocd CLI.
 #
 # WHY --server-side --force-conflicts IS MANDATORY HERE:
 #
@@ -217,11 +217,11 @@ sudo -E k3s kubectl -n "$ARGOCD_NS" get pods
 # --- 4. the CRDs the later scripts depend on ---------------------------------
 for crd in applications.argoproj.io appprojects.argoproj.io; do
   sudo -E k3s kubectl get crd "$crd" >/dev/null 2>&1 \
-    || fail "CRD $crd missing — 50-gitops.sh cannot work"
+    || fail "CRD $crd missing - 50-gitops.sh cannot work"
   ok "CRD $crd present"
 done
 
-printf '\nARGOCD OK — the initial admin password is in secret argocd-initial-admin-secret\n'
+printf '\nARGOCD OK - the initial admin password is in secret argocd-initial-admin-secret\n'
 printf 'Retrieve it with:\n'
 printf "  sudo -E k3s kubectl -n %s get secret argocd-initial-admin-secret \\\\\n" "$ARGOCD_NS"
 printf "    -o jsonpath='{.data.password}' | base64 -d\n"

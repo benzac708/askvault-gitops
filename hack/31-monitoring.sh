@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# 31-monitoring.sh — install kube-prometheus-stack so the committed
+# 31-monitoring.sh - install kube-prometheus-stack so the committed
 # ServiceMonitor is actually consumed.
 #
 # WHY THE STACK AND NOT THE PLAIN `prometheus` CHART:
 #
 #   A ServiceMonitor is a custom resource. It means nothing unless an OPERATOR
-#   reconciles it, and the plain chart has no operator — it scrapes from a
+#   reconciles it, and the plain chart has no operator - it scrapes from a
 #   file-based config dir. The result is the worst kind of wrong: the object
 #   exists, `kubectl get servicemonitor` returns a row, and nothing is
 #   collected. The repo claimed a capability it did not have. Finding 19.
@@ -20,10 +20,10 @@
 #   2. The CRDs conflict on install. Helm's client-side apply sees a stale
 #      `argocd-controller` entry in the CRDs' managedFields and refuses with
 #      "conflict with argocd-controller". The Argo Applications do not manage
-#      monitoring, so that ownership is inert — but it is permanent and cannot
+#      monitoring, so that ownership is inert - but it is permanent and cannot
 #      be patched away, because it is re-asserted. The fix is to apply the CRDs
 #      OURSELVES with `--server-side --force-conflicts` (which takes ownership
-#      cleanly, exactly as the Argo CD install needed — finding 4) and then
+#      cleanly, exactly as the Argo CD install needed - finding 4) and then
 #      install the chart with `--skip-crds`.
 #
 #      The CRDs live in a subchart as a bz2 bundle, NOT in the templates, so
@@ -34,7 +34,7 @@
 #      anonymous ghcr token request returns 403 on this node (finding). The
 #      chart exposes NO imagePullSecrets key for that job, so it cannot be
 #      configured. The webhook is optional for this use case, so it is
-#      disabled — and when disabled the dead ValidatingWebhookConfiguration is
+#      disabled - and when disabled the dead ValidatingWebhookConfiguration is
 #      left behind pointing at a Service that no longer exists. With
 #      failurePolicy=Ignore it is harmless, but it is noise that looks like a
 #      problem, so it is deleted explicitly.
@@ -79,7 +79,7 @@ fi
 # --- 2. the CRDs, applied by us -----------------------------------------------
 note "applying the monitoring CRDs server-side (see reason 2 in the header)"
 workdir="$(mktemp -d)"
-# `helm pull` is a pure DOWNLOAD — it talks to the chart repository over HTTPS
+# `helm pull` is a pure DOWNLOAD - it talks to the chart repository over HTTPS
 # and needs no cluster access and no kubeconfig. Running it under sudo was a
 # mistake: it wrote root-owned files into a user-owned temp dir, so the cleanup
 # `rm -rf` failed with a wall of "Permission denied" and masked whether the
@@ -89,7 +89,7 @@ workdir="$(mktemp -d)"
 # nothing else. A download needs neither.
 helm pull "$CHART" -d "$workdir" --untar
 crd_bundle="$workdir/kube-prometheus-stack/charts/crds/files/crds.bz2"
-[ -f "$crd_bundle" ] || fail "CRD bundle not found at $crd_bundle — chart layout changed"
+[ -f "$crd_bundle" ] || fail "CRD bundle not found at $crd_bundle - chart layout changed"
 bunzip2 -c "$crd_bundle" > "$workdir/crds.yaml"
 count="$(grep -c '^kind: CustomResourceDefinition' "$workdir/crds.yaml")"
 [ "$count" -ge 5 ] || fail "expected several CRDs, found $count"
@@ -156,7 +156,7 @@ for _ in $(seq 1 30); do
   sleep 2
 done
 ready="$(kc -n "$NS" get deploy "$RELEASE-operator" -o jsonpath='{.status.readyReplicas}' 2>/dev/null || echo 0)"
-[ "${ready:-0}" -ge 1 ] || fail "the operator has no ready replica — nothing will consume ServiceMonitors"
+[ "${ready:-0}" -ge 1 ] || fail "the operator has no ready replica - nothing will consume ServiceMonitors"
 ok "operator ready"
 
 # --- 6. the check that tells the truth ---------------------------------------

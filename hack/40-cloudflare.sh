@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 40-cloudflare.sh — point the tunnel's hostname at Traefik's NodePort.
+# 40-cloudflare.sh - point the tunnel's hostname at Traefik's NodePort.
 #
 # WHAT THIS SCRIPT DOES NOT DO, DELIBERATELY:
 #
@@ -44,7 +44,7 @@ printf '== cloudflare tunnel route ==\n'
 #
 # The config is mode 600, root-owned. Every one of the six awk/grep reads below
 # was unprivileged, so the script died on the first one. Sprinkling `sudo` on
-# each call would be six chances to forget one — and a later read that fails
+# each call would be six chances to forget one - and a later read that fails
 # quietly returns an empty string, which on THIS script means "the rule is
 # missing, rewrite the file". That is a permission error masquerading as a
 # routing decision, and it would have rewritten a working tunnel config.
@@ -148,14 +148,14 @@ PY
   # have nothing to do with this project.
   cleanup() { rm -f "$tmp_in" "$tmp_out"; }
 
-  grep -q '^ingress:' "$tmp_out" || { cleanup; fail "generated config has no ingress block — refusing to apply"; }
-  grep -q 'http_status:404' "$tmp_out" || { cleanup; fail "generated config lost the catch-all — refusing to apply"; }
-  grep -q "$CF_HOSTNAME" "$tmp_out" || { cleanup; fail "generated config lacks $CF_HOSTNAME — refusing to apply"; }
+  grep -q '^ingress:' "$tmp_out" || { cleanup; fail "generated config has no ingress block - refusing to apply"; }
+  grep -q 'http_status:404' "$tmp_out" || { cleanup; fail "generated config lost the catch-all - refusing to apply"; }
+  grep -q "$CF_HOSTNAME" "$tmp_out" || { cleanup; fail "generated config lacks $CF_HOSTNAME - refusing to apply"; }
 
   # BLAST-RADIUS GUARD: every hostname that existed before must still exist.
   for other in $(printf '%s\n' "$cfg" | awk '$1=="-" && $2=="hostname:"{print $3}'); do
     [ "$other" = "$CF_HOSTNAME" ] && continue
-    grep -q "$other" "$tmp_out" || { cleanup; fail "generated config DROPPED $other — refusing to apply"; }
+    grep -q "$other" "$tmp_out" || { cleanup; fail "generated config DROPPED $other - refusing to apply"; }
   done
 
   sudo cp "$tmp_out" "$CONFIG"
@@ -180,7 +180,7 @@ ok "$CF_HOSTNAME -> $resolved"
 
 tail_rule="$(printf '%s\n' "$cfg" | awk '$1=="-" && $2=="service:"{print $3}' | tail -1)"
 [ "$tail_rule" = "http_status:404" ] \
-  || fail "no catch-all 404 rule at the end — unmatched hostnames would be served by the first rule"
+  || fail "no catch-all 404 rule at the end - unmatched hostnames would be served by the first rule"
 ok "catch-all http_status:404 present"
 
 # --- the chain, from outside the cluster -------------------------------------
@@ -189,7 +189,7 @@ ok "catch-all http_status:404 present"
 #
 #   40-cloudflare.sh runs BEFORE 50-gitops.sh. At this point the tunnel is
 #   configured correctly but no Ingress exists, so a 404 is the CORRECT and
-#   EXPECTED response — not a failure. An earlier version failed here, which
+#   EXPECTED response - not a failure. An earlier version failed here, which
 #   would have blocked a perfectly good rebuild at step 5 of 8.
 #
 #   The chain cannot be fully asserted until GitOps has applied the Ingress.
@@ -243,7 +243,7 @@ note "https://${CF_HOSTNAME}/ -> HTTP $code (after $attempt attempt(s))"
 
 case "$code" in
   200)
-    ok "the public hostname serves the app — full chain is live"
+    ok "the public hostname serves the app - full chain is live"
     ;;
   404)
     # Expected before 50-gitops.sh. The tunnel is doing its job; the cluster
@@ -259,7 +259,7 @@ reader to the wrong host. Check, in order: Traefik listening on
 :${NODEPORT_HTTP} (30-traefik.sh); an Ingress for this hostname
 (50-gitops.sh, which has not run yet at this point in the rebuild)." ;;
   000)
-    fail "no response at all — check DNS for ${CF_HOSTNAME} and 'systemctl status cloudflared'" ;;
+    fail "no response at all - check DNS for ${CF_HOSTNAME} and 'systemctl status cloudflared'" ;;
   *)
     fail "unexpected HTTP $code" ;;
 esac

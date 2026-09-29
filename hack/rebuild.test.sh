@@ -223,7 +223,7 @@ grep -q "8b\." <<<"$out" && t 1 "16 ...and does not even mention the step" || t 
 
 # --- 17. the footer's command is runnable, from every argv[0] shape ----------
 # It was `${0%/*}`, which returns the WHOLE string when argv[0] has no slash,
-# so the footer printed "90-teardown.sh/rebuild.sh" — an unrunnable command,
+# so the footer printed "90-teardown.sh/rebuild.sh" - an unrunnable command,
 # from the script whose last job is to say what to type.
 CMD=$(cd "$TD" && bash ./90-teardown.sh 2>&1 | grep "TO REBUILD" | sed 's/.*bash //')
 [ -f "$CMD" ] && t 0 "17 footer command exists: $CMD" || t 1 "17 footer printed a non-existent path: $CMD"

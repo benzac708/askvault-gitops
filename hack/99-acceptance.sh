@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 99-acceptance.sh — the drill gate. Every check here exists because its
+# 99-acceptance.sh - the drill gate. Every check here exists because its
 # absence hid a real failure during the 2026-09-26 drill, and in each case the
 # cluster looked healthy from the outside at the time.
 #
@@ -48,7 +48,7 @@ ready="$(kc get nodes -o jsonpath='{.items[0].status.conditions[?(@.type=="Ready
 # --- 2. the two flags that were nearly lost ----------------------------------
 head_ "host-port invariants"
 if kc -n kube-system get pods 2>/dev/null | grep -qi svclb; then
-  bad "svclb present — Traefik is one binding away from colliding with Caddy"
+  bad "svclb present - Traefik is one binding away from colliding with Caddy"
 else
   ok "no svclb"
 fi
@@ -70,7 +70,7 @@ if ss -ltn 2>/dev/null | grep -qE ':80[[:space:]]'; then
   owner="$(sudo ss -ltnp 2>/dev/null | awk '/:80 /{print $NF}' | head -1)"
   case "$owner" in
     *caddy*) ok "host :80 owned by caddy" ;;
-    *)       bad "host :80 owned by '$owner', expected caddy — LoadBalancer Traefik would break this" ;;
+    *)       bad "host :80 owned by '$owner', expected caddy - LoadBalancer Traefik would break this" ;;
   esac
 else
   bad "nothing is listening on host :80"
@@ -79,7 +79,7 @@ fi
 # --- 3. GitOps is actually reconciling ---------------------------------------
 head_ "argo cd"
 if ! command -v argocd >/dev/null 2>&1; then
-  bad "argocd CLI missing — cannot check sync state"
+  bad "argocd CLI missing - cannot check sync state"
 else
   sudo fuser -k 18443/tcp >/dev/null 2>&1 || true
   nohup sudo -E k3s kubectl -n "$ARGOCD_NS" port-forward svc/argocd-server 18443:443 \
@@ -103,7 +103,7 @@ else
       # Read the JSON, not the table. `argocd app list`'s default columns are
       # documented as NAME CLUSTER NAMESPACE PROJECT STATUS HEALTH, and the awk
       # version of this check indexed columns 4/5 and parsed the PROJECT as the
-      # sync status — reported as "sync is 'askvault'". A gate that misreads its
+      # sync status - reported as "sync is 'askvault'". A gate that misreads its
       # own input is worse than no gate, so this uses -o json.
       app_json="$(argocd app get "$app" -o json 2>/dev/null || true)"
       sync="$(printf '%s' "$app_json"   | python3 -c 'import json,sys; print(json.load(sys.stdin).get("status",{}).get("sync",{}).get("status",""))' 2>/dev/null)"
@@ -138,7 +138,7 @@ pcode="$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 "https://${PUBLIC_
 for path in metrics healthz readyz; do
   code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 "https://${PUBLIC_HOST}/${path}" 2>/dev/null || echo 000)"
   [ "$code" = "404" ] && ok "/${path} 404 at the edge (path restriction holds)" \
-                      || bad "/${path} returned $code at the edge, expected 404 — the Ingress paths widened"
+                      || bad "/${path} returned $code at the edge, expected 404 - the Ingress paths widened"
 done
 
 # --- 6. a real answer, grounded in the corpus --------------------------------
@@ -188,7 +188,7 @@ fi
 head_ "secret hygiene"
 cm_keys="$(kc -n "$APP_NS" get configmap askvault-config -o jsonpath='{.data}' 2>/dev/null || true)"
 case "$cm_keys" in
-  *llm_api_key*|*API_KEY*) bad "the API key is in the ConfigMap — it must live in a Secret" ;;
+  *llm_api_key*|*API_KEY*) bad "the API key is in the ConfigMap - it must live in a Secret" ;;
   *)                       ok "no credential in the ConfigMap" ;;
 esac
 
@@ -226,7 +226,7 @@ done
 if kc top nodes >/dev/null 2>&1; then
   ok "metrics-server answers (kubectl top works)"
 else
-  bad "metrics-server is not serving metrics — kubectl top fails, so any HPA is blind"
+  bad "metrics-server is not serving metrics - kubectl top fails, so any HPA is blind"
 fi
 
 # --- 10. cert-manager, a hard dependency of the monitoring chart --------------
@@ -242,7 +242,7 @@ issued="$(kc get certificate -A --no-headers 2>/dev/null | awk '$3=="True"' | wc
 if [ "${issued:-0}" -ge 1 ]; then
   ok "$issued Certificate(s) issued"
 else
-  bad "no Certificate reports Ready=True — the monitoring webhook cert is not issued"
+  bad "no Certificate reports Ready=True - the monitoring webhook cert is not issued"
 fi
 
 # --- 11. monitoring is only useful if something READS it ----------------------
@@ -455,13 +455,13 @@ if [ "$gcode" = "200" ]; then
       "wget -qO- --timeout=5 http://${prom_ip}:9090/-/healthy 2>/dev/null | grep -qi healthy" 2>/dev/null; then
     ok "Grafana can reach the in-cluster Prometheus (${prom_ip}:9090)"
   else
-    bad "Grafana cannot reach Prometheus at ${prom_ip:-<no clusterIP>}:9090 — the datasource would fail"
+    bad "Grafana cannot reach Prometheus at ${prom_ip:-<no clusterIP>}:9090 - the datasource would fail"
   fi
 else
   # NOT a hard failure: the estate Grafana is not part of what this drill builds,
   # and the rebuild is not supposed to manage it. Its absence means monitoring has
   # no in-estate reader, which is worth saying out loud but not failing the gate.
-  note "estate Grafana not answering on :3000 (code $gcode) — not built by this drill, so not a gate failure"
+  note "estate Grafana not answering on :3000 (code $gcode) - not built by this drill, so not a gate failure"
 fi
 
 # --- verdict -----------------------------------------------------------------

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 90-teardown.sh — destroy ALL AskVault-related state, host and cluster, down
+# 90-teardown.sh - destroy ALL AskVault-related state, host and cluster, down
 # to a genuine 0%.
 #
 # ============================================================================
@@ -14,7 +14,7 @@
 # else.
 #
 # This script therefore NEVER touches:
-#   /etc/cloudflared/     the tunnel and its config — shared, and the tunnel ID
+#   /etc/cloudflared/     the tunnel and its config - shared, and the tunnel ID
 #                         is baked into DNS (see askvault-infra-export.md)
 #   the cloudflared unit  same
 #   /etc/caddy/           serves the whole estate; AskVault only depends on it
@@ -27,7 +27,7 @@
 # WHY FULL TEARDOWN INCLUDES k3s
 # ============================================================================
 #
-# The acceptance question is not "does a namespace rebuild" — it is "can this
+# The acceptance question is not "does a namespace rebuild" - it is "can this
 # be spun back up from total non-existence". Leaving k3s installed would leave
 # a cluster-admin credential, a containerd content store, and a CNI in place,
 # and the rebuild would then be testing the GitOps layer against a warm host.
@@ -38,7 +38,7 @@
 # ============================================================================
 #
 # Upstream's uninstall removes /etc/rancher/k3s, /var/lib/kubelet, /run/k3s
-# and the binary — but it LEAVES:
+# and the binary - but it LEAVES:
 #     /var/lib/rancher/k3s   (~6.0G: containerd content store, images, agent data)
 #     /run/k3s               (~4.7G at runtime; usually released on stop)
 #     /etc/rancher/node      the node password
@@ -50,7 +50,7 @@
 # ============================================================================
 # USAGE
 # ============================================================================
-#   ./90-teardown.sh              dry run — prints the plan, destroys nothing
+#   ./90-teardown.sh              dry run - prints the plan, destroys nothing
 #   ./90-teardown.sh --yes        actually destroy
 #   ./90-teardown.sh --yes --keep-k3s    namespaces only, leave the cluster
 #
@@ -113,7 +113,7 @@ export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
 #   confirm()  reports the planned action and answers "should we act?". It
 #              ALWAYS returns 0 so that under `set -e` it can never abort the
 #              script. An earlier version returned 1 in dry-run mode, which
-#              escaped the `if` and killed the run after step 7 — so the dry
+#              escaped the `if` and killed the run after step 7 - so the dry
 #              run printed half a plan and exited silently, hiding exactly the
 #              steps (k3s removal, verification) a reader most needs to see.
 #
@@ -145,14 +145,14 @@ fi
 kc() { sudo -E k3s kubectl "$@"; }
 
 # ============================================================================
-# 0. GUARD — refuse to run if this does not look like the host we expect
+# 0. GUARD - refuse to run if this does not look like the host we expect
 # ============================================================================
 step "0. estate guard"
 # If k3s is absent there is nothing cluster-side to do, and the host steps
 # below still apply. But if we are on a host where the estate lives, the
 # allowlist must not match it. Assert the allowlist is still narrow.
 if [ "${#OUR_CONTAINERS[@]}" -gt 3 ]; then
-  fail "OUR_CONTAINERS has grown to ${#OUR_CONTAINERS[@]} entries — review before running.
+  fail "OUR_CONTAINERS has grown to ${#OUR_CONTAINERS[@]} entries - review before running.
 This script deletes containers by name and a widened list is how it eats someone else's service."
 fi
 ok "container allowlist is ${#OUR_CONTAINERS[@]} entr(y|ies): ${OUR_CONTAINERS[*]}"
@@ -290,13 +290,13 @@ else
 fi
 
 # ============================================================================
-# 8. k3s itself — the actual 0%
+# 8. k3s itself - the actual 0%
 # ============================================================================
 step "8. k3s (the host layer)"
 if [ "$KEEP_K3S" -eq 1 ]; then
   note "skipped (--keep-k3s)"
 elif [ ! -x /usr/local/bin/k3s-uninstall.sh ]; then
-  note "k3s-uninstall.sh not present — k3s does not appear to be installed"
+  note "k3s-uninstall.sh not present - k3s does not appear to be installed"
 else
   # `k3s-killall.sh` first, exactly as section 6.6 of the drill document does.
   # It SIGKILLs every container regardless of state, including the CNI and
@@ -388,7 +388,7 @@ if [ "$CONFIRMED" -eq 0 ]; then
 else
   if [ "$KEEP_K3S" -eq 0 ]; then
     [ -x /usr/local/bin/k3s ] && fail "k3s binary still present" || ok "k3s binary gone"
-    [ -d /var/lib/rancher/k3s ] && fail "/var/lib/rancher/k3s still present — rebuild would reuse cached images" || ok "containerd store gone"
+    [ -d /var/lib/rancher/k3s ] && fail "/var/lib/rancher/k3s still present - rebuild would reuse cached images" || ok "containerd store gone"
     [ -d /etc/rancher/k3s ] && fail "/etc/rancher/k3s still present" || ok "/etc/rancher/k3s gone"
     [ -d /var/lib/kubelet ] && fail "/var/lib/kubelet still present" || ok "/var/lib/kubelet gone"
     [ -d /var/lib/cni ] && fail "/var/lib/cni still present" || ok "/var/lib/cni gone"
@@ -397,21 +397,21 @@ else
     # this one the teardown would certify a host that still hands out
     # cluster-admin access to a cluster that no longer exists.
     [ -f "$HOME/.kube/config" ] \
-      && fail "$HOME/.kube/config still present — a cluster-admin credential survives the teardown" \
+      && fail "$HOME/.kube/config still present - a cluster-admin credential survives the teardown" \
       || ok "per-user kubeconfig gone"
     systemctl is-active --quiet k3s && fail "k3s unit still active" || ok "k3s unit inactive"
   fi
 
   # The estate must be untouched. Assert it rather than assuming it.
   systemctl is-active --quiet cloudflared && ok "cloudflared still active (untouched)" \
-    || fail "cloudflared is NOT active — this script should not have affected it"
+    || fail "cloudflared is NOT active - this script should not have affected it"
   [ -f /etc/cloudflared/config.yml ] && ok "tunnel config intact" || fail "tunnel config missing"
   [ -f /etc/caddy/Caddyfile ] && ok "Caddyfile intact" || fail "Caddyfile missing"
 
-  # And the app should now be unreachable — that is the expected, honest state.
+  # And the app should now be unreachable - that is the expected, honest state.
   code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 https://askvault.zachara.dev/ 2>/dev/null || echo 000)"
   case "$code" in
-    200) note "askvault.zachara.dev still returns 200 — the teardown did NOT take effect" ;;
+    200) note "askvault.zachara.dev still returns 200 - the teardown did NOT take effect" ;;
     502|503|504) ok "askvault.zachara.dev -> $code (tunnel up, nothing behind it: correct)" ;;
     000|404) ok "askvault.zachara.dev -> $code (expected during teardown)" ;;
     *) note "askvault.zachara.dev -> $code" ;;

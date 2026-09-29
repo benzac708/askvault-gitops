@@ -39,7 +39,7 @@ reconciles with `automated` sync, `prune` and `selfHeal`, so hand-drift is
 corrected without being asked.
 
 The difference between dev and prod is namespace, environment label, the three
-LLM config keys, the rate ceilings, and the hostname — nothing else. That
+LLM config keys, the rate ceilings, and the hostname - nothing else. That
 constraint is enforced by review, not by a tool; see the base/overlay comments
 for what that means in practice.
 
@@ -88,5 +88,5 @@ order is load-bearing: Argo `Application` objects are deleted before the
 `argocd` namespace so an ImageUpdater finalizer cannot deadlock the deletion.
 
 The host edge (Caddy + cloudflared + DNS) is a VPS-level concern tracked in
-the estate repo (`services/caddy/Caddyfile`), not here — this repository owns
+the estate repo (`services/caddy/Caddyfile`), not here - this repository owns
 everything after bootstrap.

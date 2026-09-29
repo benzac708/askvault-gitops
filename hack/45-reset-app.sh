@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 45-reset-app.sh — put the APP LAYER back to nothing, so the run that follows
+# 45-reset-app.sh - put the APP LAYER back to nothing, so the run that follows
 # builds it from scratch instead of inheriting it.
 #
 # WHY THIS EXISTS

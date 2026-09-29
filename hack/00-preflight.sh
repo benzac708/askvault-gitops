@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 00-preflight.sh — verify the host before installing anything.
+# 00-preflight.sh - verify the host before installing anything.
 #
 # WHY THIS EXISTS. The first drill attempt discovered two occupied host ports by
 # having Traefik silently fail to bind. A port collision found here costs ten
@@ -23,7 +23,7 @@ printf '== preflight ==\n'
 
 # --- architecture. The whole image path assumes arm64. ------------------------
 arch="$(uname -m)"
-[ "$arch" = "aarch64" ] || fail "expected aarch64, got $arch — the images in this drill are arm64-only"
+[ "$arch" = "aarch64" ] || fail "expected aarch64, got $arch - the images in this drill are arm64-only"
 ok "architecture: $arch"
 
 # --- memory. Zero swap by design, so RAM headroom is a hard constraint. -------
@@ -53,7 +53,7 @@ export PATH="$HOME/.local/bin:$PATH"
 # BUG FOUND ON THE FIRST BARE-HOST RUN, 2026-09-26: this script demanded
 # `kubectl` and `k3s`, and both are created BY 10-k3s.sh. On a host that had
 # just been torn down to 0%, preflight failed immediately with
-# "kubectl not found" — meaning the first step of the rebuild could never pass
+# "kubectl not found" - meaning the first step of the rebuild could never pass
 # on the very host state it exists to verify. A precondition check must only
 # require what its OWN step needs, never what a later step provides.
 # docker is genuinely required before any of this: the rebuild does not install
@@ -65,7 +65,7 @@ for tool in k3s kubectl helm; do
   if command -v "$tool" >/dev/null 2>&1; then
     ok "found $tool"
   else
-    note "$tool absent — installed by a later script, expected on a bare host"
+    note "$tool absent - installed by a later script, expected on a bare host"
   fi
 done
 
@@ -92,7 +92,7 @@ if [ -f /etc/rancher/k3s/k3s.yaml ]; then
   [ "$mode" = "600" ] || fail "/etc/rancher/k3s/k3s.yaml is mode $mode, expected 600"
   ok "existing kubeconfig is mode 600"
 else
-  note "no cluster yet — 10-k3s.sh will create one"
+  note "no cluster yet - 10-k3s.sh will create one"
 fi
 
 printf '\nPREFLIGHT OK\n'

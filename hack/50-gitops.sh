@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 50-gitops.sh — register the gitops repo with Argo CD and apply the Argo
+# 50-gitops.sh - register the gitops repo with Argo CD and apply the Argo
 # objects, so the cluster starts reconciling from Git.
 #
 # WHY A DEPLOY KEY AND NOT A TOKEN:
@@ -26,7 +26,7 @@
 #   forever with "resource :Namespace is not permitted in project". The
 #   whitelist names exactly that one kind. ClusterRole, ClusterRoleBinding,
 #   CRD and every other escalation primitive stay forbidden, which is what the
-#   project exists to enforce — creating a Namespace grants no permission over
+#   project exists to enforce - creating a Namespace grants no permission over
 #   anything inside it.
 #
 # IDEMPOTENT: kubectl apply is declarative; `argocd repo add` is guarded by a
@@ -126,7 +126,7 @@ note "repo status: ${status:-unknown}"
 # Not from a heredoc in this script. Manifests applied only from a shell do not
 # survive a teardown, and the point of this directory is that it does. The repo
 # is the source of truth for its own deployment.
-[ -d "$LOCAL_GITOPS/argo" ] || fail "$LOCAL_GITOPS/argo not found — clone the gitops repo first"
+[ -d "$LOCAL_GITOPS/argo" ] || fail "$LOCAL_GITOPS/argo not found - clone the gitops repo first"
 note "pulling the gitops repo so the applied objects match what is committed"
 # Fetch and hard-reset the TRACKED files, rather than `pull --ff-only`.
   #
@@ -145,7 +145,7 @@ note "pulling the gitops repo so the applied objects match what is committed"
   git -C "$LOCAL_GITOPS" reset --hard --quiet origin/main \
     || fail "cannot reset $LOCAL_GITOPS to origin/main"
   if [ -n "$(git -C "$LOCAL_GITOPS" status --porcelain --untracked-files=no)" ]; then
-    fail "$LOCAL_GITOPS still differs from origin/main after reset — refusing to apply an unknown state"
+    fail "$LOCAL_GITOPS still differs from origin/main after reset - refusing to apply an unknown state"
   fi
   ok "gitops worktree at $(git -C "$LOCAL_GITOPS" rev-parse --short HEAD)"
 
@@ -358,7 +358,7 @@ for app in askvault-prod askvault-dev; do
   ok "$app repoURL matches the registered repo"
 done
 
-printf '\nGITOPS OK — reconciliation has started.\n'
+printf '\nGITOPS OK - reconciliation has started.\n'
 printf 'Sync + health takes up to a minute. Verify with:\n'
 printf '  argocd app list\n'
 printf 'Run 99-acceptance.sh once both Applications read Synced AND Healthy.\n'

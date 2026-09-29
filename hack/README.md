@@ -1,4 +1,4 @@
-# hack/ — the rebuild, scripted
+# hack/ - the rebuild, scripted
 
 One command rebuilds the whole platform:
 
@@ -10,8 +10,8 @@ It asks for the OpenRouter key at a hidden prompt, runs every step in
 dependency order, stops at the first failure, and exits non-zero if any step
 failed. `--from <step>`, `--only <a,b>` and `--list` narrow it.
 
-The **whole drill** — destroy the host to 0%, then rebuild it and gate the
-result — is also one command:
+The **whole drill** - destroy the host to 0%, then rebuild it and gate the
+result - is also one command:
 
 ```bash
 bash ~/repos/askvault/hack/rebuild.sh --from-zero --yes
@@ -37,11 +37,11 @@ than trusting that a command succeeded.
 | `45-reset-app.sh` | **Drop the app layer** (2 Applications, 2 namespaces) so 50 builds it from nothing. Skips on a clean host. | 20, 40 |
 | `50-gitops.sh` | Deploy key, repo registration, AppProject + Applications, both secrets | 20, 40, 45 |
 | `31-monitoring.sh` | kube-prometheus-stack, ServiceMonitor, estate Grafana wiring | 50 |
-| `rebuild.sh` | **Runs the whole rebuild in order.** `--from-zero` tears down first. Not a step in it. | — |
-| `90-teardown.sh` | Destroy in the correct order. Dry-run by default. Ends by printing one command. | — |
-| `95-export-sanitise.sh` | Render section 6 for publication; **fails** on any hostname leak | — |
+| `rebuild.sh` | **Runs the whole rebuild in order.** `--from-zero` tears down first. Not a step in it. | - |
+| `90-teardown.sh` | Destroy in the correct order. Dry-run by default. Ends by printing one command. | - |
+| `95-export-sanitise.sh` | Render section 6 for publication; **fails** on any hostname leak | - |
 | `99-acceptance.sh` | The drill gate. Read-only. | 50, 31 |
-| `rebuild.test.sh` | Unit tests for the orchestrator. Touches no cluster. | — |
+| `rebuild.test.sh` | Unit tests for the orchestrator. Touches no cluster. | - |
 
 ## Order that matters
 
@@ -56,8 +56,8 @@ proof of it. `31-monitoring.sh` runs *after* `50-gitops.sh`, because a
 ServiceMonitor has nothing to scrape until the Deployment it watches exists.
 `45-reset-app.sh` runs *before* `50-gitops.sh`, because a warm namespace makes
 `50` take its "already exists" branch. Sorting the directory and running
-whatever comes out gives a green run with an empty dashboard and — the same
-defect, quieter — a green run whose secrets were written into a namespace the
+whatever comes out gives a green run with an empty dashboard and - the same
+defect, quieter - a green run whose secrets were written into a namespace the
 run never created. `rebuild.sh` is the only place the order is encoded; do not
 reconstruct it from the filenames.
 
@@ -78,7 +78,7 @@ namespace absent          ->  "namespace askvault-prod created up front"  ok, ex
 
 Only the second is evidence that the from-scratch path works, and the first
 looks exactly as convincing. So every rebuild after the first would quietly
-prove less than the one before it — and "already exists" is why finding 21a
+prove less than the one before it - and "already exists" is why finding 21a
 survived a run that was supposed to have fixed it: the fix was correct, and the
 run never reached the code it changed.
 
@@ -87,10 +87,10 @@ knowing before you touch it:
 
 - **It deletes the Application before the namespace.** The Application is the
   object that recreates the namespace (`syncOptions CreateNamespace=true`), so
-  deleting the namespace first is a race Argo wins within seconds — and then
+  deleting the namespace first is a race Argo wins within seconds - and then
   `50` takes the "already exists" branch and proves nothing. Verified: zero
   Applications and zero namespaces reappeared in the 20s after the delete.
-- **It skips itself on a clean host** — no k3s binary, no cluster, or no Argo
+- **It skips itself on a clean host** - no k3s binary, no cluster, or no Argo
   means "nothing to reset", and that is the *common* case after a real
   `90-teardown.sh`. A step that failed on a clean host would make the from-zero
   path untestable, which is a poor trade for the one step whose entire job is to
@@ -109,7 +109,7 @@ To confirm a cold run, look for `created up front` on **both** namespaces in the
 Deliberate, and worth stating rather than leaving as an implied preference.
 This is a single-VPS drill; GitOps owns everything after bootstrap. The scripts
 exist so the rebuild is reproducible, not because bash is the right answer at
-scale — it has no state tracking, no plan/apply, and no drift detection.
+scale - it has no state tracking, no plan/apply, and no drift detection.
 Idempotency is written by hand here, which is exactly the work Terraform would
 do for you. Naming the gap is worth more than pretending there isn't one.
 
@@ -128,7 +128,7 @@ do for you. Naming the gap is worth more than pretending there isn't one.
 6. **Destruction requires `--yes`.** `90-teardown.sh` is dry-run by default.
    A plain `rebuild.sh` is the deliberate exception: `45-reset-app.sh` deletes
    two Applications and two namespaces, and plain `rebuild.sh` takes no
-   `--yes`. That asymmetry is the point — `45` is scoped to two namespaces by
+   `--yes`. That asymmetry is the point - `45` is scoped to two namespaces by
    name and rebuilt six steps later, whereas `90` takes the cluster itself.
    A confirmation prompt belongs where the blast radius is unrecoverable, not
    on a step that restores what it removes.
@@ -161,7 +161,7 @@ do for you. Naming the gap is worth more than pretending there isn't one.
    second time. An empty key is refused: an empty Secret value satisfies a
    required `secretKeyRef`, so the pod would start and answer nothing.
 9. **A sequence written twice is wrong in one of the two places.** The teardown
-   used to end by printing a hand-typed copy of the rebuild order — and it was
+   used to end by printing a hand-typed copy of the rebuild order - and it was
    already missing `45-reset-app.sh`. That copy is what a reader is told to
    follow at the exact moment they have destroyed their cluster, and following
    it rebuilt a warm app layer, so the run never reached the code finding 21a
@@ -169,7 +169,7 @@ do for you. Naming the gap is worth more than pretending there isn't one.
    claimed. There is no list at the bottom of `90-teardown.sh` now. It prints
    one command, and `rebuild.sh` prints the order. Nothing to keep in sync.
 10. **"0%" has to be true of every copy.** The teardown verified
-    `/etc/rancher/k3s/k3s.yaml` was gone and called the host clean — while a
+    `/etc/rancher/k3s/k3s.yaml` was gone and called the host clean - while a
     second copy of the same cluster-admin credential sat in `~/.kube/config`,
     installed by the finding 23 fix, which the teardown did not know about. The
     check covered the file the reader thinks of and not the file the reader
@@ -188,7 +188,7 @@ bash ~/repos/askvault/hack/rebuild.test.sh
 
 51 assertions, no cluster, no network, a few seconds. It drives the real
 `rebuild.sh` and `90-teardown.sh` with stubbed steps and asserts on **the
-order things happened in** — in particular that a missing credential refuses
+order things happened in** - in particular that a missing credential refuses
 *before* the teardown runs, which is the property that stops a missing key from
 costing you a working cluster. Run it after any edit to either script.
 
@@ -197,8 +197,8 @@ costing you a working cluster. Run it after any edit to either script.
 Three things are account- or host-specific and are **not** recreated by any
 script here. Say so rather than implying otherwise:
 
-1. The Cloudflare tunnel (`prod-zachara-tunnel`) — a named object on an account.
-2. The DNS record for the public hostname — Cloudflare-side.
+1. The Cloudflare tunnel (`prod-zachara-tunnel`) - a named object on an account.
+2. The DNS record for the public hostname - Cloudflare-side.
 3. The image is `linux/arm64` **only**; it will not pull on x86.
 
 `40-cloudflare.sh` configures a tunnel that already exists. It does not create
