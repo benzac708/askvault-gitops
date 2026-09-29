@@ -45,7 +45,7 @@ run() {                    # run <dir> <args...>  (stdin from /dev/null = non-tt
   echo $?
 }
 # `run` is a shell function, so `env VAR=x run` cannot work. Set it exported.
-withkey() { export OPENROUTER_API_KEY=sk-or-v1-0123456789abcdef; }
+withkey() { export OPENROUTER_API_KEY=fixture-not-a-real-key; }
 nokey()   { unset OPENROUTER_API_KEY; }
 
 # --- 1. --yes without --from-zero is rejected, not silently ignored -----------
@@ -131,7 +131,7 @@ grep -q "rebuild WITHOUT destroying" "$D/out.txt" && t 0 "9  ...offers the non-d
 # --- 10. tty: typed confirmation, accepted -----------------------------------
 D=$WORK/t10; mk "$D"
 export ORDER_LOG="$D/order.log"; : > "$ORDER_LOG"
-printf 'yes\n' | script -qec "cd $D && OPENROUTER_API_KEY=sk-or-v1-0123456789abcdef bash ./rebuild.sh --from-zero" "$D/typescript" > "$D/out.txt" 2>&1
+printf 'yes\n' | script -qec "cd $D && OPENROUTER_API_KEY=fixture-not-a-real-key bash ./rebuild.sh --from-zero" "$D/typescript" > "$D/out.txt" 2>&1
 [ "$(head -1 "$D/order.log")" = "TEARDOWN-RAN args=[--yes]" ] && t 0 "10 tty, answered 'yes' -> teardown ran" || t 1 "10 ...first line: $(head -1 "$D/order.log")"
 grep -q "REBUILD COMPLETE" "$D/out.txt" && t 0 "10 ...run completed" || t 1 "10 ...did not complete"
 
