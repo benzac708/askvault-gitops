@@ -10,15 +10,18 @@
 #   chain is cloudflared tunnel -> 127.0.0.1:30080 -> Traefik, and NodePort is what makes
 #   that chain legal.
 #
-# WHY kubernetesCRD IS DISABLED:
+# WHY kubernetesCRD IS ENABLED:
 #
-#   With CRDs enabled, Traefik accepts IngressRoute objects. Manifests written
-#   against IngressRoute are not portable to any other controller, and the
-#   IngressRoute CRDs would need to be installed and owned by this repo. With
-#   CRDs off, standard Ingress is the ONLY option - not merely the preferred
-#   one - which is the more honest posture for a portable portfolio artefact.
-#   Verified against the installed controller, not against chart defaults:
-#   `helm get values` plus the deployment's rendered container args.
+#   Traefik then accepts IngressRoute objects and Middleware. AskVault's edge
+#   uses both: IngressRoute keeps the L2 exact-path contract expressible, and
+#   Middleware carries the prod policy (security headers, edge rate cap, read
+#   path retry) instead of scattering it into the app. The known trade-off is
+#   portability - IngressRoute is Traefik-flavoured, not controller-agnostic -
+#   and the CRDs are owned by the Traefik chart. The standard Ingress provider
+#   stays enabled in parallel, so plain Ingress remains a supported route for
+#   anything that prefers it (the portability fallback is documented, not
+#   broken). Verified against the installed controller, not against chart
+#   defaults: `helm get values` plus the deployment's rendered container args.
 #
 # WHY ingressEndpoint.ip IS SET AND publishedService IS DISABLED:
 #
@@ -114,7 +117,7 @@ sudo -E helm upgrade --install "$RELEASE" "$CHART" -n "$NS" --create-namespace \
   --set ingressRoute.dashboard.enabled=false \
   --set ports.web.nodePort="$NODEPORT_HTTP" \
   --set ports.websecure.nodePort="$NODEPORT_HTTPS" \
-  --set providers.kubernetesCRD.enabled=false \
+  --set providers.kubernetesCRD.enabled=true \
   --set providers.kubernetesIngress.enabled=true \
   --set providers.kubernetesIngress.publishedService.enabled=false \
   --set providers.kubernetesIngress.ingressEndpoint.ip="$ENDPOINT_IP" \
