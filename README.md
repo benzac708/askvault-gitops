@@ -59,6 +59,14 @@ for what that means in practice.
   loudly (`optional` is never set), rather than silently falling back to the
   mock provider.
 
+## CI
+
+`.github/workflows/verify.yml` renders both overlays with checksum-pinned
+kustomize on push and pull request. It is currently dormant: the account's
+private-repo GitHub Actions minutes are blocked by a failed-payment state, so
+this workflow will not run until that is resolved. The same state is why the
+application's CI is gated locally via `act` (see the `askvault` README).
+
 ## Rebuild
 
 The whole node-and-app lifecycle is scripted in `hack/`, numbered so sort

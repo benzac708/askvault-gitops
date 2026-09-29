@@ -1,0 +1,42 @@
+name: verify
+
+# Minimal render gate for manifest changes: both overlays must kustomize-build.
+# Dormant by account circumstance, not by design: private-repo GitHub Actions
+# minutes are currently blocked by a failed-payment / spending-limit state on
+# this account (see askvault README), so this workflow is visible but will not
+# run until that is resolved. It is written to be green the moment it can.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: askvault-gitops-verify-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1 (digest-pinned)
+        with:
+          persist-credentials: false
+
+      - name: Install kustomize (pinned, checksum-verified)
+        run: |
+          set -euo pipefail
+          cd "$(mktemp -d)"
+          curl -fsSL -O "https://github.com/kubernetes-sigs/kustomize/releases/download/kustomize%2Fv5.6.0/kustomize_v5.6.0_linux_amd64.tar.gz"
+          curl -fsSL -O "https://github.com/kubernetes-sigs/kustomize/releases/download/kustomize%2Fv5.6.0/kustomize_v5.6.0_linux_amd64.tar.gz.sha256"
+          sha256sum -c kustomize_v5.6.0_linux_amd64.tar.gz.sha256
+          tar -xzf kustomize_v5.6.0_linux_amd64.tar.gz -C /usr/local/bin kustomize
+
+      - name: Render dev overlay
+        run: kustomize build overlays/dev >/dev/null && echo "dev renders"
+
+      - name: Render prod overlay
+        run: kustomize build overlays/prod >/dev/null && echo "prod renders"
