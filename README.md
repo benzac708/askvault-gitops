@@ -51,7 +51,9 @@ for what that means in practice.
 - D32 rate ceilings (10 req/min per IP, 15/min and 40/day global) sit below
   the provider's own quota, so the app refuses before the provider does.
 - L2 edge: only `/` and `/chat` are routed publicly under the
-  `askvault.zachara.dev` host. `/healthz`, `/readyz` and `/metrics` are
+  `askvault.zachara.dev` host, via a Traefik IngressRoute with a Middleware
+  chain (security headers, edge rate cap, retry on the read path). Plain
+  Ingress remains supported in parallel (portability fallback). `/healthz`, `/readyz` and `/metrics` are
   deliberately unreachable from outside the cluster (kubelet and Prometheus
   reach them in-cluster).
 - Config is a ConfigMap; the credential is a Secret injected out of band and
