@@ -1,0 +1,19 @@
+# Fast local gates for GitOps manifest repos.
+# Target: <5s on staged files. Heavy checks live in CI, not here.
+repos:
+  - repo: local
+    hooks:
+      - id: kubeconform
+        name: kubeconform (K8s schema validation)
+        entry: kubeconform -strict -summary -ignore-missing-schemas
+        language: system
+        types: [yaml]
+        exclude: \.github/
+        pass_filenames: true
+
+      - id: gitleaks
+        name: gitleaks (secret scan)
+        entry: gitleaks protect --staged --redact
+        language: system
+        pass_filenames: false
+        stages: [pre-commit]
