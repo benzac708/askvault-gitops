@@ -9,7 +9,7 @@ repos:
         language: system
         types: [yaml]
         files: (^|/)(manifests|apps|base|overlays|argo)/
-        exclude: (values\.yaml|\.github/|\.pre-commit-config\.yaml)
+        exclude: (values\.yaml|\.github/|\.pre-commit-config\.yaml|patch[^/]*\.yaml|kustomization\.yaml)
         pass_filenames: true
 
       - id: gitleaks
