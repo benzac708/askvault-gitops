@@ -8,7 +8,8 @@ repos:
         entry: kubeconform -strict -summary -ignore-missing-schemas
         language: system
         types: [yaml]
-        exclude: \.github/
+        files: (^|/)(manifests|apps|base|overlays|argo)/
+        exclude: (values\.yaml|\.github/|\.pre-commit-config\.yaml)
         pass_filenames: true
 
       - id: gitleaks
